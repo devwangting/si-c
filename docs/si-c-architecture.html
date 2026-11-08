@@ -1,0 +1,1248 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>si-c 源码实现详解 · 从终端字节流到可编辑代码</title>
+<style>
+:root{
+  --bg:#f4f6fa; --paper:#ffffff; --ink:#1b2430; --muted:#5d6b7d;
+  --line:#d9e0ea; --accent:#2457c5; --accent2:#0f766e;
+  --code:#0f172a; --codeink:#dbe4f0; --codecomment:#8fb3d9;
+  --warn:#9a5b00; --warnbg:#fff7e6; --ok:#166534; --okbg:#ecfdf3;
+  --sidebar:#111827; --sidebarink:#cbd5e1;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0; background:var(--bg); color:var(--ink);
+  font:16px/1.75 "Segoe UI","Noto Sans SC","Microsoft YaHei",Arial,sans-serif;
+}
+a{color:var(--accent); text-decoration:none}
+a:hover{text-decoration:underline}
+code{font-family:"Cascadia Code","JetBrains Mono",Consolas,"Courier New",monospace}
+.sidebar{
+  position:fixed; inset:0 auto 0 0; width:292px; overflow:auto;
+  background:var(--sidebar); color:var(--sidebarink); padding:26px 20px 40px;
+}
+.sidebar h1{font-size:20px; line-height:1.35; color:#fff; margin:0 0 6px}
+.sidebar .sub{font-size:12px; color:#94a3b8; margin-bottom:22px}
+.sidebar .toc-title{font-size:11px; letter-spacing:.14em; color:#7f8ea3; margin:20px 0 8px}
+.sidebar a{display:block; color:var(--sidebarink); font-size:13.5px; padding:4px 0}
+.sidebar a:hover{color:#fff; text-decoration:none}
+.sidebar a.sub2{padding-left:14px; font-size:12.5px; color:#a9b6c7}
+.main{margin-left:292px; padding:0 42px 80px}
+.hero{
+  margin:0 -42px 40px; padding:64px 42px 42px;
+  background:linear-gradient(135deg,#0b1220 0%,#14284d 55%,#0f3a52 100%);
+  color:#fff;
+}
+.hero .kicker{letter-spacing:.18em; font-size:12px; color:#93c5fd; font-weight:700}
+.hero h1{font-size:42px; line-height:1.2; margin:12px 0 14px; max-width:900px}
+.hero p{font-size:17px; color:#cbd5e1; max-width:860px; margin:0}
+.chips{margin-top:24px; display:flex; flex-wrap:wrap; gap:8px}
+.chip{border:1px solid #3b5b86; color:#dbeafe; padding:5px 10px; border-radius:999px; font-size:12px}
+.content{max-width:1050px}
+section{margin:0 0 52px; scroll-margin-top:20px}
+h2{font-size:29px; line-height:1.3; margin:0 0 16px; padding-bottom:10px; border-bottom:2px solid var(--line)}
+h3{font-size:21px; margin:30px 0 10px}
+h4{font-size:17px; margin:22px 0 8px}
+p{margin:10px 0}
+.lead{font-size:17px; color:#344256}
+.muted{color:var(--muted)}
+.tag{display:inline-block; font-size:12px; padding:2px 8px; border-radius:6px; background:#e8eefb; color:#244b9b; margin-right:6px}
+.note{border-left:4px solid var(--accent); background:#eef3ff; padding:12px 16px; margin:16px 0; border-radius:0 8px 8px 0}
+.note.warn{border-left-color:#d97706; background:var(--warnbg); color:#5b3500}
+.note.ok{border-left-color:#16a34a; background:var(--okbg); color:#14532d}
+.codecard{margin:18px 0; border-radius:10px; overflow:hidden; border:1px solid #1e293b; background:var(--code)}
+.codehead{background:#1e293b; color:#e2e8f0; padding:8px 14px; font:12px/1.4 "Cascadia Code",Consolas,monospace; border-bottom:1px solid #334155}
+.codecard pre{margin:0; padding:16px 18px; overflow:auto; color:var(--codeink); font:13.2px/1.65 "Cascadia Code","JetBrains Mono",Consolas,monospace; tab-size:4}
+.codecard pre code{white-space:pre}
+.codenote{margin:0; padding:10px 16px; background:#172033; color:#aab8cc; font-size:13px; border-top:1px solid #263247}
+.flowcard{margin:18px 0; border:1px solid var(--line); border-radius:10px; background:#fbfcff; overflow:hidden}
+.flowhead{padding:8px 14px; background:#eaf0fa; color:#243b63; font-weight:600; font-size:13px; border-bottom:1px solid var(--line)}
+pre.flow{margin:0; padding:18px; overflow:auto; color:#203049; font:13px/1.55 "Cascadia Code",Consolas,monospace; background:#fbfcff}
+table{width:100%; border-collapse:collapse; margin:16px 0; font-size:14.5px; background:var(--paper)}
+th,td{border:1px solid var(--line); padding:9px 11px; text-align:left; vertical-align:top}
+th{background:#edf1f8; color:#24324a; font-weight:700}
+tr:nth-child(even) td{background:#fafbfe}
+ul,ol{margin:10px 0 10px 24px}
+li{margin:5px 0}
+.grid{display:grid; grid-template-columns:1fr 1fr; gap:16px}
+.panel{background:var(--paper); border:1px solid var(--line); border-radius:10px; padding:16px 18px}
+.panel h4{margin-top:0}
+.kv{font-family:Consolas,monospace; color:#244b9b}
+.small{font-size:13px; color:var(--muted)}
+.anchor{position:relative; top:-12px; visibility:hidden}
+.totop{font-size:12px; color:var(--muted); margin-top:18px}
+@media(max-width:980px){
+  .sidebar{position:static; width:auto; padding:18px 22px}
+  .main{margin-left:0; padding:0 20px 60px}
+  .hero{margin:0 -20px 32px; padding:42px 20px 30px}
+  .hero h1{font-size:32px}
+  .grid{grid-template-columns:1fr}
+}
+@media print{
+  .sidebar{display:none}.main{margin:0;padding:0}.hero{margin:0 0 20px}
+  .codecard{break-inside:avoid}.flowcard{break-inside:avoid}
+}
+</style>
+</head>
+<body>
+<nav class="sidebar">
+  <h1>si-c 源码实现详解</h1>
+  <div class="sub">C11 · POSIX · ANSI · 无第三方 UI 库 · AI 生成</div>
+  <div class="toc-title">阅读路线</div>
+  <a href="#overview">0. 先看全局</a>
+  <a href="#startup">1. 程序如何启动</a>
+  <a href="#data">2. 数据结构</a>
+  <a href="#term">3. 终端输入输出</a>
+  <a href="#buffer">4. 文本缓冲区</a>
+  <a href="#editing">5. 编辑命令</a>
+  <a href="#render">6. 屏幕渲染</a>
+  <a href="#index">7. 索引与解析</a>
+  <a href="#features">8. 功能模块</a>
+  <a href="#hard">9. 难点与解决</a>
+  <a href="#tests">10. 测试与调试</a>
+  <a href="#map">11. 函数地图</a>
+  <a href="#reading">12. 初级程序员阅读顺序</a>
+  <a href="#glossary">13. 术语表</a>
+</nav>
+<main class="main">
+<header class="hero">
+  <div class="kicker">SOURCE WALKTHROUGH · 2026</div>
+  <h1>从终端字节流到可编辑代码</h1>
+  <p>一份面向初级程序员的 si-c 源码实现详解：不讲空泛概念，沿着 Buffer、光标、ANSI、索引器和事件循环，把“编辑内容如何变成屏幕”一层一层拆开。</p>
+  <div class="chips">
+    <span class="chip">纯 C11</span><span class="chip">POSIX termios</span>
+    <span class="chip">ANSI escape</span><span class="chip">无 ncurses</span>
+    <span class="chip">约 1.5 万行 C 代码</span><span class="chip">109 + 43 + 145 项测试</span>
+    <span class="chip">AI 生成</span>
+  </div>
+  <p class="muted" style="margin-top:18px;color:#cbd5e1">AI 生成声明：本项目的代码、测试与文档由 AI 编程助手（OpenCode / DeepSeek）生成，人类负责需求、验收与发布。它不是 Source Insight 官方产品。</p>
+</header>
+<div class="content">
+
+<section id="overview">
+<h2>0. 先看全局：这不是一个 GUI 程序</h2>
+<p class="lead">程序只做一件事：维护内存里的文本缓冲区，然后每一帧把缓冲区投影成终端字符网格。</p>
+<p>没有 Qt，没有 GTK，没有 ncurses，没有 readline。终端只负责显示字符和处理转义序列；文本编辑、光标、滚动、选择、撤销、布局、颜色全部由 C 代码自己实现。</p>
+<div class="flowcard"><div class="flowhead">总体分层</div><pre class="flow">
+┌──────────────────────────────────────────────────────────────┐
+│                        main.c / ui_run                       │
+│  解析参数 → 初始化终端 → 加载项目 → 进入事件循环 → 清理退出   │
+└───────────────────────────────┬──────────────────────────────┘
+                                │
+        ┌───────────────────────┼────────────────────────┐
+        ▼                       ▼                        ▼
+┌───────────────┐      ┌────────────────┐      ┌────────────────┐
+│    term.c     │      │    app.c       │      │   render.c     │
+│ raw mode      │      │ 编辑命令        │      │ 布局 + 绘制     │
+│ 按键解析      │◄────►│ 焦点/菜单/弹窗  │─────►│ ANSI 帧        │
+│ 鼠标 SGR      │      │ 历史/项目       │      │ 光标投影        │
+└───────┬───────┘      └───────┬────────┘      └───────┬────────┘
+        │                      │                        │
+        │              ┌───────▼────────┐               │
+        │              │    text.c      │               │
+        │              │ Buffer / 行索引 │               │
+        │              │ 撤销 / UTF-8    │               │
+        │              └───────┬────────┘               │
+        │                      │                        │
+        │              ┌───────▼────────┐               │
+        │              │   index.c      │               │
+        │              │ 项目扫描/符号   │               │
+        │              │ 引用/调用图     │               │
+        │              └───────┬────────┘               │
+        │                      │                        │
+        │              ┌───────▼────────┐               │
+        └─────────────►│ syntax.c/util.c│◄──────────────┘
+                       │ 高亮 / 字符串  │
+                       └────────────────┘
+</pre></div>
+<div class="grid">
+  <div class="panel"><h4>数据源</h4><p><code>Buffer.data</code> 保存整个文件的连续字节；<code>Buffer.lines[]</code> 保存每一行的起始偏移。屏幕不保存文本。</p></div>
+  <div class="panel"><h4>投影</h4><p>每一帧执行 <code>line = scroll_line + screen_row</code>，把 Buffer 的一个可见窗口画到终端行列。</p></div>
+  <div class="panel"><h4>输入</h4><p>终端 raw mode 下，每次按键直接到达程序。<code>term_read_key()</code> 解析成 <code>KeyEvent</code>，再由 <code>app_handle_key()</code> 分发。</p></div>
+  <div class="panel"><h4>输出</h4><p><code>render.c</code> 把整帧拼成一个 ANSI 字符串，<code>term_write()</code> 一次写出去。终端就是最终显示设备。</p></div>
+</div>
+<div class="note ok">记住一句话：<b>Buffer 是本体，屏幕是投影。</b> 编辑不是直接改终端上的字符，而是改 Buffer，然后下一帧重新投影。</div><div class="note warn">阅读约定：核心路径的代码块保留完整逻辑并逐行注释；为了突出主线，少量与当前主题无关的错误分支用 <code>...</code> 省略。标有“简化”的片段是教学版，完整实现以 <code>src/</code> 下的源文件为准。</div></section>
+<section id="startup">
+<h2>1. 程序如何启动</h2>
+<p><code>main()</code> 只负责命令行参数和批处理模式；真正的交互入口是 <code>ui_run()</code>。</p>
+<div class="flowcard"><div class="flowhead">启动顺序</div><pre class="flow">
+main(argc, argv)
+  │
+  ├─ 解析 --index/--files/--symbols/--refs/--search 等批处理参数
+  │     └─ 直接输出结果，不进入 TUI
+  │
+  └─ ui_run(root, initial_file, theme)
+        │
+        ├─ memset(App) / 初始化主题和焦点
+        ├─ term_init()
+        │     ├─ tcgetattr / tcsetattr 进入 raw mode
+        │     ├─ 备用屏幕 ?1049h
+        │     ├─ 隐藏光标 ?25l
+        │     └─ 开启鼠标 ?1002h / ?1003h / ?1006h
+        │
+        ├─ project_load(root)
+        │     ├─ 递归扫描源文件
+        │     ├─ 逐文件 lex + parse
+        │     └─ 生成 Symbol / File / 引用数据
+        │
+        ├─ app_rebuild_globals()
+        ├─ app_layout()
+        ├─ app_open_file_index(第一个文件)
+        ├─ app_set_home()
+        │
+        ├─ while (!quit)
+        │     ├─ app_layout / app_ensure_visible
+        │     ├─ 列表选中项修正
+        │     ├─ app_render()
+        │     ├─ term_read_key()
+        │     └─ app_handle_key()
+        │
+        ├─ term_shutdown()
+        └─ 释放 Buffer / Project / View / 历史 / 弹窗数据
+</pre></div><div class="codecard"><div class="codehead">程序入口骨架（main.c 与 ui_run 的核心）</div><pre><code>
+int main(int argc, char **argv)
+{
+    /*
+     * 1. 解析参数。
+     *    --index / --symbols / --refs 等批处理模式不会进入 TUI，
+     *    它们直接加载项目、打印结果并返回。
+     */
+    ...
+    /*
+     * 2. 交互模式。
+     *    root         要索引的项目目录
+     *    initial_file 启动时直接打开的文件
+     *    theme        dark / light
+     */
+    rc = ui_run(root, initial, theme);
+    return rc;
+}
+
+int ui_run(const char *root, const char *initial_file, const char *theme)
+{
+    App a;
+    Project project;
+
+    memset(&amp;a, 0, sizeof(a));
+    a.active = -1;
+    a.focus = FOCUS_EDITOR;
+    app_use_theme(&amp;a, theme);
+
+    /*
+     * 终端初始化失败时不能进入 TUI，否则用户会看到一个
+     * 没有回显、没有行缓冲、无法退出的终端。
+     */
+    if (!term_init(&amp;err))
+        return 2;
+
+    /*
+     * 建立项目索引。项目加载失败必须 term_shutdown()，
+     * 把终端从 raw mode 和备用屏幕恢复回来。
+     */
+    if (!project_load(&amp;project, root, index_progress, &amp;ctx, &amp;err)) {
+        term_shutdown();
+        return 1;
+    }
+
+    a.project = project;
+    app_rebuild_globals(&amp;a);
+    app_layout(&amp;a);
+
+    /*
+     * 打开初始文件。没有 initial_file 就打开第一个文件；
+     * 空项目则只显示 splash。
+     */
+    ...
+    while (!a.quit) {
+        KeyEvent ev;
+        int rc;
+
+        /* 每一帧都重新计算布局，处理终端缩放和分隔条拖动 */
+        app_layout(&amp;a);
+        app_ensure_visible(&amp;a);
+
+        /* 保证三个列表的当前选中项在可视区域内 */
+        file_selection_fix(&amp;a);
+        symbol_selection_fix(&amp;a);
+        outline_selection_fix(&amp;a);
+
+        /* 把当前状态投影成整屏 ANSI */
+        app_render(&amp;a);
+
+        /* 阻塞等待一个事件；返回 0 表示窗口尺寸变化 */
+        rc = term_read_key(&amp;ev);
+        if (rc &lt; 0) break;
+        if (rc == 0) continue;
+
+        /* 修改 Buffer / 焦点 / 菜单 / 项目等状态 */
+        app_handle_key(&amp;a, &amp;ev);
+
+        /* 光标仍在编辑器时，同步左栏大纲和 CODE 面板 */
+        if (a.focus == FOCUS_EDITOR) {
+            sync_outline_to_cursor(&amp;a);
+            app_update_info(&amp;a);
+        }
+    }
+
+    term_shutdown();
+    /* 释放所有堆内存 */
+    ...
+    return 0;
+}
+</code></pre><p class="codenote">注释围绕“终端生命周期”和“帧循环”展开；实际错误分支和清理代码更长，见 src/app.c。</p></div></section>
+<section id="data">
+<h2>2. 数据结构：先认识主角</h2>
+<h3>2.1 Buffer：一个打开的文件</h3>
+<p><code>Buffer</code> 是整个编辑器最核心的结构。它不是一行一行的字符串数组，而是一整块连续字节 + 一个行起始偏移表。</p>
+<div class="codecard"><div class="codehead">Buffer 字段逐行注释（简化自 text.h）</div><pre><code>
+typedef struct Buffer {
+    char *path;          /* 文件绝对路径 */
+    char *name;          /* 文件名，用于标签/状态栏 */
+    char *data;          /* 整个文件内容，连续字节 */
+    size_t len;          /* data 的有效字节数 */
+    size_t cap;          /* data 的分配容量 */
+
+    int *lines;          /* lines[i] = 第 i 行第一个字节在 data 中的偏移 */
+    size_t nlines;       /* 当前行数 */
+    size_t cap_lines;    /* lines 数组容量 */
+    bool lines_valid;    /* false 表示行索引失效，需要重建 */
+
+    int cursor;          /* 光标：data 中的字节偏移，不是屏幕坐标 */
+    int goal_col;        /* 上下移动时希望保持的“显示列” */
+    int scroll_line;     /* 屏幕第一行显示文件第几行 */
+    int scroll_col;      /* 屏幕第一列显示显示列第几列 */
+
+    SyntaxCache syn;     /* 语法高亮缓存：每行起始状态 */
+
+    UndoRec *undo;       /* 撤销栈 */
+    size_t nundo;
+    size_t cundo;
+    UndoRec *redo;       /* 重做栈 */
+    size_t nredo;
+    size_t credo;
+    int next_group;      /* 下一次修改使用的撤销组号 */
+    int cur_group;       /* 当前撤销组；连续输入合并成一组 */
+
+    uint64_t state_id;   /* 当前内容版本 */
+    uint64_t next_state_id;
+    uint64_t saved_state;/* 保存时的 state_id，用于判断 dirty */
+    uint64_t rev;        /* 修改计数，驱动语法/局部变量缓存失效 */
+} Buffer;
+</code></pre><p class="codenote">最重要的四个量：data（内容）、cursor（光标字节偏移）、scroll_line/scroll_col（可见窗口）。</p></div>
+<div class="note"><b>为什么不用 <code>char *lines[]</code> 保存每行字符串？</b><br>
+因为插入/删除一个字节时，如果每行都是独立字符串，会涉及大量指针和内存搬移。这里只维护一个连续 <code>data</code>，行索引只保存起始偏移；修改后让 <code>lines_valid=false</code>，下次查询时重建。这样实现简单，缓存局部性也好。</div>
+
+<h3>2.2 App：整个编辑器的状态</h3>
+<p><code>App</code> 把“当前打开的文件、焦点、布局、视图、历史、菜单、弹窗”集中在一起。它相当于传统 GUI 中的 Application/Editor 对象。</p>
+<div class="codecard"><div class="codehead">App 的关键字段</div><pre><code>
+typedef struct App {
+    Project project;          /* 项目索引：文件、符号、引用 */
+    Buffer **bufs;            /* 当前打开的所有文件 */
+    int nbuf, capbuf, active; /* 打开数量、容量、当前文件下标 */
+
+    Focus focus;              /* 当前焦点：编辑器/大纲/CODE/文件列表/调用链 */
+    int outline_sel, outline_scroll;
+    int file_sel, file_scroll;
+    int sym_sel, sym_scroll;
+    View outline;             /* 左栏大纲的显示项 */
+    View view;                /* 右侧视图（引用/上下文/搜索/调用链） */
+
+    int rows, cols;           /* 终端尺寸 */
+    int lw, cw, rw;           /* 左/中/右列宽 */
+    int top_h, bottom_h;      /* 中间上下高度 */
+    int right_top_h, right_bottom_h;
+    int content_top, content_height;
+    int ed_h, ed_w, gutter_w; /* 编辑器可见高宽、行号栏宽度 */
+
+    int left_pct, right_pct;  /* 拖动分隔条后的比例 */
+    int center_top_pct, right_top_pct;
+    int drag_mode, hover_mode;
+
+    Buffer *info_buffer;      /* CODE 面板显示外部文件时的只读 Buffer */
+    char info_word[128];      /* 光标下标识符 */
+    char info_where[256];     /* 定义位置 file:line */
+    int info_code_start;      /* CODE 面板代码起始行 */
+    ...
+
+    NavLoc *back, *fwd;       /* 前进/后退历史 */
+    NavLoc home;              /* 首次打开位置，供 Forward 尽头回退 */
+
+    bool menu_active;         /* 顶端下拉菜单是否展开 */
+    bool chooser_active;      /* 同名函数选择框 */
+    bool dir_active;          /* 打开/新建项目目录选择框 */
+    ...
+} App;
+</code></pre><p class="codenote">完整字段见 src/app.h。这里只列与编辑、布局、视图相关的部分。</p></div>
+<h3>2.3 Project / Symbol：索引器产物</h3>
+<p>项目加载后，<code>Project</code> 中保存所有源文件、所有符号和引用搜索结果。编辑器本身不解析 C；解析结果由 <code>index.c</code> 提供。</p>
+<table>
+<tr><th>结构</th><th>含义</th></tr>
+<tr><td><code>ProjectFile</code></td><td>路径、相对路径、该文件符号在全局数组中的区间</td></tr>
+<tr><td><code>Symbol</code></td><td>名称、签名、种类（函数/变量/宏/类型）、文件、行、列、结束行</td></tr>
+<tr><td><code>View</code> / <code>ViewItem</code></td><td>右侧列表的可显示项：标签、详情、跳转位置、缩进层级</td></tr>
+<tr><td><code>LocalVar</code></td><td>函数内局部变量/参数：名称、类型、声明行、作用域结束行</td></tr>
+<tr><td><code>CallEdge</code></td><td>调用图边：caller、callee、调用发生的文件/行/列</td></tr>
+</table>
+</section>
+
+<section id="term">
+<h2>3. 终端输入输出：term.c</h2>
+<p>这一层是唯一直接面对操作系统终端的部分。Linux 用 POSIX <code>termios</code>/<code>read</code>/<code>write</code>；Windows 开发后端用 Win32 Console API。其余模块都是纯 C。</p>
+
+<h3>3.1 进入 raw mode</h3>
+<div class="codecard"><div class="codehead">term_init()：把终端变成“按键立即到达”的模式</div><pre><code>
+bool term_init(char **err)
+{
+    struct termios raw;
+
+    if (!term_is_tty()) {
+        /* 输入输出不是终端，不能进入 TUI */
+        if (err) *err = xstrdup(&quot;stdin/stdout is not a terminal&quot;);
+        return false;
+    }
+    if (tcgetattr(STDIN_FILENO, &amp;g_orig) != 0) {
+        /* 保存原终端设置失败，之后无法正确恢复 */
+        ...
+    }
+    g_have_termios = true;
+
+    raw = g_orig;
+    raw.c_iflag &amp;= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
+    /* 关掉输入转换：回车不再自动变成 \n，Ctrl+S 不再触发流控 */
+
+    raw.c_oflag &amp;= ~(OPOST);
+    /* 关掉输出处理：程序自己控制 \r\n */
+
+    raw.c_cflag |= CS8;
+    /* 8 位字符，UTF-8 字节不会被截断 */
+
+    raw.c_lflag &amp;= ~(ECHO | ICANON | IEXTEN | ISIG);
+    /* 关掉回显、行缓冲、扩展输入、信号键 */
+
+    raw.c_cc[VMIN] = 1;
+    raw.c_cc[VTIME] = 0;
+    /* read() 至少等到 1 个字节；不超时 */
+
+    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &amp;raw) != 0) {
+        ...
+    }
+
+    signal(SIGWINCH, on_winch); /* 终端缩放 */
+    signal(SIGTERM, on_fatal);  /* 被终止时恢复终端 */
+    signal(SIGHUP, on_fatal);
+    signal(SIGINT, on_fatal);
+    atexit(atexit_restore);
+
+    g_active = true;
+    term_write(TERM_START, sizeof(TERM_START) - 1);
+    return true;
+}
+</code></pre><p class="codenote">关键点：关闭 ICANON、ECHO、ISIG。没有这些，终端会按行缓冲并自动回显，程序无法实现即时编辑。</p></div><div class="codecard"><div class="codehead">TERM_START / TERM_END</div><pre><code>
+static const char TERM_START[] =
+    &quot;\x1b[?1049h&quot;   /* 进入备用屏幕，退出后恢复原终端内容 */
+    &quot;\x1b[?25l&quot;     /* 隐藏光标 */
+    &quot;\x1b[2J&quot;       /* 清屏 */
+    &quot;\x1b[H&quot;        /* 光标回左上 */
+    &quot;\x1b[?1002h&quot;   /* 鼠标按下/拖拽上报 */
+    &quot;\x1b[?1003h&quot;   /* 鼠标移动上报，用于分隔条悬停 */
+    &quot;\x1b[?1006h&quot;;  /* SGR 鼠标格式：支持大坐标和释放事件 */
+
+static const char TERM_END[] =
+    &quot;\x1b[?2026l&quot;   /* 结束同步输出 */
+    &quot;\x1b[?1006l\x1b[?1003l\x1b[?1002l&quot;
+    &quot;\x1b[0m&quot;       /* 重置颜色 */
+    &quot;\x1b[?25h&quot;     /* 显示光标 */
+    &quot;\x1b[?1049l&quot;;  /* 退出备用屏幕 */
+</code></pre></div>
+<h3>3.2 按键解析</h3>
+<p><code>term_read_key()</code> 先读一个字节，再根据首字节决定后续读取：</p>
+<div class="flowcard"><div class="flowhead">按键解析流程</div><pre class="flow">
+read() 一个字节
+   │
+   ├─ 0/224（Windows 扩展键）→ 读第二个字节 → 功能键映射
+   ├─ 27 (ESC) → 读后续字节，判断是单 ESC、Alt+字符、CSI 序列
+   │      ├─ ESC [ A / ESC O A → 上方向键
+   │      ├─ ESC [ 1 2 ~ → F2
+   │      ├─ ESC [ &lt; 0 ; 20 ; 8 M → SGR 鼠标
+   │      └─ 否则 → 单 ESC 或未知序列
+   ├─ 127 → Backspace
+   ├─ 8   → Ctrl+H
+   ├─ 13/10 → Enter
+   ├─ 9   → Tab
+   ├─ &lt;32 → 控制键码（Ctrl+A=1, Ctrl+F=6 ...）
+   └─ &gt;=32 → 普通字符 / UTF-8 多字节
+</pre></div><div class="note ">鼠标坐标是终端行列，不是像素。SGR 格式里的 <code>(x,y)</code> 直接对应字符网格坐标，因此鼠标命中测试只需比较整数。</div>
+<h3>3.3 输出</h3>
+<p>所有绘制最终都变成字符串，由 <code>term_write()</code> 写 stdout：</p>
+<div class="codecard"><div class="codehead">term_write / term_mouse_hover</div><pre><code>
+void term_write(const char *data, size_t len)
+{
+    if (len)
+        write_all(data, len);   /* 循环处理短写，直到写完 */
+}
+
+void term_mouse_hover(bool on)
+{
+    /* 菜单/弹窗打开时关闭 1003，避免鼠标移动导致持续重绘 */
+    if (on)
+        term_write(&quot;\x1b[?1003h&quot;, 9);
+    else
+        term_write(&quot;\x1b[?1003l&quot;, 9);
+}
+</code></pre></div></section>
+<section id="buffer">
+<h2>4. 文本缓冲区：text.c</h2>
+<h3>4.1 行索引</h3>
+<p>行索引只保存每行第一个字节的位置。例如 <code>"abc
+  hi
+"</code>：</p>
+<div class="flowcard"><div class="flowhead">行索引如何建立</div><pre class="flow">
+data:   a  b  c \n     &#x27; &#x27; &#x27; &#x27; h  i \n
+偏移:   0  1  2  3  4  5  6  7  8  9
+
+lines[0] = 0
+lines[1] = 4
+lines[2] = 9
+
+buf_line_start(b, 1) = lines[1] = 4
+buf_line_content_end(b, 1) = 找下一个 \n 的位置 = 8
+</pre></div><div class="codecard"><div class="codehead">buf_ensure_lines / buf_line_of_offset</div><pre><code>
+void buf_ensure_lines(Buffer *b)
+{
+    if (b-&gt;lines_valid)
+        return;                 /* 行索引还有效，直接返回 */
+
+    /* 先数换行符，得到行数 */
+    size_t count = 1;
+    for (size_t i = 0; i &lt; b-&gt;len; i++)
+        if (b-&gt;data[i] == &#x27;\n&#x27;)
+            count++;
+
+    /* 扩容 lines 数组 */
+    if (b-&gt;cap_lines &lt; count) {
+        b-&gt;cap_lines = count + 8;
+        b-&gt;lines = xrealloc(b-&gt;lines,
+                            b-&gt;cap_lines * sizeof(*b-&gt;lines));
+    }
+
+    /* 逐行记录起始偏移 */
+    b-&gt;nlines = 0;
+    b-&gt;lines[b-&gt;nlines++] = 0;
+    for (size_t i = 0; i &lt; b-&gt;len; i++) {
+        if (b-&gt;data[i] == &#x27;\n&#x27;)
+            b-&gt;lines[b-&gt;nlines++] = (int)(i + 1);
+    }
+    b-&gt;lines_valid = true;
+}
+
+int buf_line_of_offset(Buffer *b, size_t pos)
+{
+    buf_ensure_lines(b);
+
+    /* 在有序的 lines[] 中二分查找：
+       找到最后一个 lines[mid] &lt;= pos 的行 */
+    size_t lo = 0, hi = b-&gt;nlines;
+    while (lo &lt; hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        if ((size_t)b-&gt;lines[mid] &lt;= pos)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    return lo ? (int)(lo - 1) : 0;
+}
+</code></pre><p class="codenote">O(log n) 的偏移→行号转换。修改后 lines_valid=false，下次查询时重建。</p></div>
+<h3>4.2 修改内容：memmove + memcpy</h3>
+<p>所有插入、删除最终都走 <code>buffer_apply()</code>。它不做语法分析，不更新屏幕，只改连续字节并让行索引失效。</p>
+<div class="codecard"><div class="codehead">buffer_apply()：最底层的“编辑”</div><pre><code>
+static void buffer_apply(Buffer *b, size_t pos, size_t del_len,
+                         const char *ins, size_t ins_len)
+{
+    /* 越界保护 */
+    if (pos &gt; b-&gt;len)
+        pos = b-&gt;len;
+    if (del_len &gt; b-&gt;len - pos)
+        del_len = b-&gt;len - pos;
+
+    /* tail：删除区间后面还有多少字节需要搬移 */
+    size_t tail = b-&gt;len - pos - del_len;
+    size_t new_len = b-&gt;len - del_len + ins_len;
+
+    /* 按需扩容，使用倍增策略 */
+    if (new_len + 1 &gt; b-&gt;cap) {
+        size_t cap = b-&gt;cap ? b-&gt;cap : 128;
+        while (cap &lt; new_len + 1)
+            cap *= 2;
+        b-&gt;data = xrealloc(b-&gt;data, cap);
+        b-&gt;cap = cap;
+    }
+
+    /* 先把尾部整体后移/前移，给插入腾位置或填补删除空洞 */
+    if (tail)
+        memmove(b-&gt;data + pos + ins_len,
+                b-&gt;data + pos + del_len,
+                tail);
+
+    /* 把新内容复制进去 */
+    if (ins_len)
+        memcpy(b-&gt;data + pos, ins, ins_len);
+
+    b-&gt;len = new_len;
+    b-&gt;data[b-&gt;len] = &#x27;\0&#x27;;   /* 保证可以当 C 字符串使用 */
+
+    b-&gt;lines_valid = false;   /* 行号变了，行索引失效 */
+    b-&gt;rev++;                 /* 让语法缓存/局部变量缓存失效 */
+}
+
+bool buf_insert_at(Buffer *b, size_t pos, const char *text, size_t len)
+{
+    if (!len) return false;
+    redo_clear(b);                              /* 新修改清空 redo */
+    record_change(b, pos, NULL, 0, text, len);  /* 记录撤销 */
+    buffer_apply(b, pos, 0, text, len);         /* 真正改内存 */
+    return true;
+}
+
+bool buf_delete_range(Buffer *b, size_t pos, size_t len)
+{
+    if (!len || pos &gt;= b-&gt;len) return false;
+    if (len &gt; b-&gt;len - pos) len = b-&gt;len - pos;
+    redo_clear(b);
+    record_change(b, pos, b-&gt;data + pos, len, NULL, 0);
+    buffer_apply(b, pos, len, NULL, 0);
+    return true;
+}
+</code></pre><p class="codenote">重点理解 memmove 的 tail：编辑本质上是“搬字节”，不是操作行对象。</p></div>
+<h3>4.3 撤销/重做</h3>
+<p>每次修改记录 old_text 和 new_text；连续输入通过 group 合并，Ctrl+Z 一次撤销一组。</p>
+<div class="codecard"><div class="codehead">撤销记录与撤销执行</div><pre><code>
+typedef struct {
+    size_t pos;        /* 修改发生的位置 */
+    char *old_text;    /* 修改前的文本 */
+    size_t old_len;
+    char *new_text;    /* 修改后的文本 */
+    size_t new_len;
+    int group;         /* 同一组连续输入一起撤销 */
+    uint64_t before_state;
+    uint64_t after_state;
+} UndoRec;
+
+bool buf_undo(Buffer *b)
+{
+    if (b-&gt;nundo == 0)
+        return false;
+
+    b-&gt;cur_group = -1;
+    int group = b-&gt;undo[b-&gt;nundo - 1].group;
+
+    /* 把同组的 UndoRec 依次反向应用 */
+    while (b-&gt;nundo &gt; 0 &amp;&amp;
+           b-&gt;undo[b-&gt;nundo - 1].group == group) {
+        UndoRec r = b-&gt;undo[--b-&gt;nundo];
+        buffer_apply(b, r.pos, r.new_len,
+                     r.old_text, r.old_len);
+        b-&gt;state_id = r.before_state;
+        undo_push(b, &amp;b-&gt;redo, &amp;b-&gt;nredo, &amp;b-&gt;credo, r);
+    }
+    return true;
+}
+</code></pre><p class="codenote">state_id 用于判断文件是否 dirty；撤销后恢复到修改前的 state_id。</p></div>
+<h3>4.4 UTF-8、Tab 与显示列</h3>
+<p>Buffer 里的偏移是字节，屏幕上的列是显示列。两者不能混用。</p>
+<div class="codecard"><div class="codehead">显示列 ↔ 字节偏移</div><pre><code>
+int buf_visual_col(Buffer *b, size_t pos)
+{
+    int line = buf_line_of_offset(b, pos);
+    size_t start = buf_line_start(b, line);
+    size_t i = start;
+    int col = 0;
+
+    while (i &lt; pos) {
+        unsigned char c = b-&gt;data[i];
+        if (c == &#x27;\t&#x27;) {
+            /* Tab 对齐到下一个 4 的倍数 */
+            col += SI_TAB_WIDTH - (col % SI_TAB_WIDTH);
+            i++;
+        } else if (c &lt; 0x80) {
+            if (c != &#x27;\r&#x27; &amp;&amp; c != &#x27;\n&#x27;)
+                col++;
+            i++;
+        } else {
+            /* UTF-8 多字节：宽度由 Unicode 码点决定 */
+            uint32_t cp;
+            int n = utf8_decode(b-&gt;data + i, pos - i, &amp;cp);
+            col += utf8_cp_width(cp);
+            i += n;
+        }
+    }
+    return col;
+}
+
+size_t buf_offset_at_visual(Buffer *b, int line, int target)
+{
+    /* 从行起点开始，累加显示宽度，直到达到 target 列 */
+    size_t i = buf_line_start(b, line);
+    int col = 0;
+    while (i &lt; end) {
+        ...
+        if (target &lt; col + w)
+            return i;
+        col += w;
+        i += n;
+    }
+    return end;
+}
+</code></pre><p class="codenote">鼠标点击、上下移动、光标定位都依赖这两个函数。没有它们，Tab 和中文会错位。</p></div></section>
+<section id="editing">
+<h2>5. 编辑命令：app.c</h2>
+<h3>5.1 一个字符如何进入 Buffer</h3>
+<div class="codecard"><div class="codehead">insert_at_cursor()</div><pre><code>
+static void insert_at_cursor(App *a, const char *text, size_t len)
+{
+    Buffer *b = app_buffer(a);
+    if (!b || len == 0)
+        return;
+
+    size_t pos = (size_t)b-&gt;cursor;  /* 当前字节偏移 */
+
+    buf_insert_at(b, pos, text, len);/* 修改 data + 记录撤销 */
+
+    b-&gt;cursor = (int)(pos + len);    /* 光标移到新字符之后 */
+    b-&gt;goal_col = buf_visual_col(b, (size_t)b-&gt;cursor);
+
+    a-&gt;find_pos = 0;
+    a-&gt;find_len = 0;
+    a-&gt;view_stale = true;
+
+    app_ensure_visible(a);           /* 必要时滚动 */
+}
+</code></pre></div><div class="flowcard"><div class="flowhead">按键到 Buffer 再到屏幕</div><pre class="flow">
+键盘 &#x27;X&#x27;
+  │
+  ▼
+term_read_key()
+  │ KeyEvent
+  ▼
+app_handle_key()
+  │
+  ▼
+app_handle_editor_key()
+  │
+  ▼
+insert_at_cursor()
+  │
+  ▼
+buf_insert_at()
+  │
+  ▼
+buffer_apply()
+  │ memmove / memcpy
+  ▼
+Buffer.data 改变
+  │ cursor 后移；lines_valid=false；rev++
+  ▼
+app_ensure_visible()
+  │
+  ▼
+下一轮 app_render()
+  │ 重新读取 Buffer
+  ▼
+终端屏幕出现新字符
+</pre></div>
+<h3>5.2 光标和滚动</h3>
+<div class="codecard"><div class="codehead">app_ensure_visible()</div><pre><code>
+void app_ensure_visible(App *a)
+{
+    Buffer *b = app_buffer(a);
+    int line = buf_line_of_offset(b, (size_t)b-&gt;cursor);
+    int col  = buf_visual_col(b, (size_t)b-&gt;cursor);
+    int h    = SI_MAX(1, a-&gt;ed_h);
+
+    /* 光标在窗口上方：向上滚 */
+    if (line &lt; b-&gt;scroll_line)
+        b-&gt;scroll_line = line;
+
+    /* 光标在窗口下方：向下滚 */
+    if (line &gt;= b-&gt;scroll_line + h)
+        b-&gt;scroll_line = line - h + 1;
+
+    /* 横向同理 */
+    if (col &lt; b-&gt;scroll_col)
+        b-&gt;scroll_col = SI_MAX(0, col - 4);
+
+    if (col &gt;= b-&gt;scroll_col + a-&gt;ed_w)
+        b-&gt;scroll_col = col - a-&gt;ed_w + 5;
+}
+</code></pre><p class="codenote">scroll_line/scroll_col 是屏幕窗口左上角对应的 Buffer 位置。</p></div><div class="codecard"><div class="codehead">move_vertical()：保持 goal_col</div><pre><code>
+static void move_vertical(App *a, int delta)
+{
+    Buffer *b = app_buffer(a);
+    int line = buf_line_of_offset(b, (size_t)b-&gt;cursor);
+    int target = line + delta;
+
+    if (target &lt; 0) target = 0;
+    if (target &gt;= (int)buf_line_count(b))
+        target = (int)buf_line_count(b) - 1;
+
+    /* 用 goal_col 而不是当前行末列：
+       长行 → 短行 → 长行时，列位置不会丢 */
+    b-&gt;cursor = (int)buf_offset_at_visual(b, target, b-&gt;goal_col);
+
+    app_ensure_visible(a);
+}
+</code></pre></div>
+<h3>5.3 按键分发</h3>
+<p><code>app_handle_key()</code> 按优先级处理：帮助 → 目录选择 → 菜单 → 同名函数选择 → 提示框 → 鼠标 → 全局快捷键 → 当前焦点面板。</p>
+<div class="flowcard"><div class="flowhead">事件分发优先级</div><pre class="flow">
+KeyEvent
+  │
+  ├─ help 打开?           → 关闭帮助
+  ├─ dir picker 打开?     → 目录浏览
+  ├─ menu 打开?           → 菜单导航
+  ├─ chooser 打开?        → 同名函数选择
+  ├─ prompt 打开?         → 输入框
+  ├─ 鼠标事件?            → 命中面板/拖动/选择
+  ├─ 全局快捷键?          → F10/F11、F6、Ctrl+O/N/S/A/F/H/Q...
+  └─ 按 focus 分发
+        ├─ FOCUS_EDITOR  → 编辑/移动/查找/定义
+        ├─ FOCUS_OUTLINE → 大纲列表
+        ├─ FOCUS_PROJECT → 文件列表
+        ├─ FOCUS_CONTEXT → 调用链
+        └─ FOCUS_INFO    → CODE 滚动
+</pre></div></section>
+<section id="render">
+<h2>6. 屏幕渲染：render.c</h2>
+<h3>6.1 每一帧都是从头生成</h3>
+<div class="codecard"><div class="codehead">app_render()：生成一帧 ANSI</div><pre><code>
+void app_render(App *a)
+{
+    Str out;
+    str_init(&amp;out);            /* 新帧：空字符串 */
+    a-&gt;show_cursor = false;
+
+    /* 同步输出：终端先缓存整帧，结束标记到达后一起显示 */
+    str_puts(&amp;out, &quot;\x1b[?2026h&quot;);
+    str_puts(&amp;out, &quot;\x1b[?25l&quot;); /* 绘制期间隐藏光标 */
+
+    if (a-&gt;too_small) {
+        draw_too_small(a, &amp;out);
+    } else {
+        sgr_move(&amp;out, 0, 0);
+        draw_title(a, &amp;out);
+        draw_header(a, &amp;out);
+        draw_content(a, &amp;out);
+        draw_hint(a, &amp;out);
+        draw_status(a, &amp;out);
+
+        if (a-&gt;menu_active) draw_menu(a, &amp;out);
+        if (a-&gt;chooser_active) draw_chooser(a, &amp;out);
+        if (a-&gt;dir_active) draw_dir_picker(a, &amp;out);
+        if (a-&gt;help) draw_help(a, &amp;out);
+    }
+
+    /* 光标最后定位；显示动作放在同步块结束之后 */
+    bool cursor_visible = ...;
+    if (cursor_visible)
+        str_printf(&amp;out, &quot;\x1b[%d;%dH&quot;,
+                   a-&gt;cursor_y + 1, a-&gt;cursor_x + 1);
+
+    str_puts(&amp;out, &quot;\x1b[?2026l&quot;);
+    str_puts(&amp;out, cursor_visible ? &quot;\x1b[?25h&quot; : &quot;\x1b[?25l&quot;);
+
+    term_write(out.data, out.len); /* 一次写出整帧 */
+    str_free(&amp;out);
+}
+</code></pre><p class="codenote">没有 screen[][] 这样的帧缓冲；终端的字符网格就是最终显示设备。</p></div>
+<h3>6.2 内容区如何映射</h3>
+<div class="codecard"><div class="codehead">draw_content() 的屏幕行 → 文件行</div><pre><code>
+static void draw_content(App *a, Str *out)
+{
+    for (int row = 0; row &lt; a-&gt;content_height; row++) {
+        sgr_move(out, a-&gt;content_top + row, 0);
+
+        draw_outline_row(a, out, row);  /* 左栏 */
+        sep_cell(out, a);               /* 竖分隔线 */
+
+        if (row &lt; a-&gt;top_h) {
+            if (!app_buffer(a)) {
+                draw_splash(a, out, row);
+            } else {
+                /* 核心投影公式 */
+                int line = app_buffer(a)-&gt;scroll_line + row;
+                draw_editor_row(a, out, row, line);
+            }
+        } else if (row == a-&gt;top_h) {
+            draw_divider(...);          /* CODE 面板标题 */
+        } else {
+            draw_info(a, out, row - a-&gt;top_h - 1);
+        }
+
+        if (a-&gt;rw &gt; 0) {
+            sep_cell(out, a);
+            if (row &lt; a-&gt;right_top_h)
+                draw_file_row(a, out, row);
+            else if (row == a-&gt;right_split_row)
+                draw_divider(...);      /* CALL FLOW 标题 */
+            else
+                draw_right_row(a, out, row - a-&gt;right_top_h - 1);
+        }
+    }
+}
+</code></pre></div><div class="codecard"><div class="codehead">draw_editor_row()：行号 + 代码</div><pre><code>
+static void draw_editor_row(App *a, Str *out, int row, int line)
+{
+    Buffer *b = app_buffer(a);
+
+    /* 当前光标行使用不同背景色 */
+    bool current =
+        line == buf_line_of_offset(b, (size_t)b-&gt;cursor);
+
+    /* 行号，右对齐，宽度由总行数决定 */
+    char num[32];
+    snprintf(num, sizeof(num), &quot;%*d&quot;, a-&gt;gutter_w, line + 1);
+    draw_text(out, num, strlen(num), a-&gt;gutter_w, true);
+
+    /* 分隔符 */
+    str_puts(out, &quot; │ &quot;);
+
+    /* 从 Buffer 取这一行的内容，按宽度和 scroll_col 绘制 */
+    draw_code(a, out, b, line, a-&gt;ed_w);
+}
+</code></pre></div><div class="codecard"><div class="codehead">draw_code_range() 的字符循环</div><pre><code>
+while (i &lt; end &amp;&amp; printed &lt; width) {
+    uint32_t cp;
+    int n = utf8_decode(b-&gt;data + i, end - i, &amp;cp);
+    int w;
+
+    /* 当前字符的显示宽度：Tab 展开、宽字符 2 列 */
+    if (cp == &#x27;\t&#x27;)
+        w = SI_TAB_WIDTH - (vcol % SI_TAB_WIDTH);
+    else
+        w = utf8_cp_width(cp);
+
+    /* 横向滚动：这字符完全在窗口左边，跳过 */
+    if (vcol + w &lt;= scroll) {
+        vcol += w;
+        i += n;
+        continue;
+    }
+
+    /* 只有一部分在窗口左边，补空格 */
+    if (vcol &lt; scroll) {
+        draw_spaces(out, vcol + w - scroll);
+        vcol += w;
+        i += n;
+        continue;
+    }
+
+    /* 超出右边界，停止 */
+    if (printed + w &gt; width)
+        break;
+
+    /* 根据语法 span 和选中区间切颜色 */
+    ...
+
+    /* 普通字符直接拷贝 UTF-8 字节；Tab 输出空格 */
+    str_append(out, b-&gt;data + i, n);
+    printed += w;
+    vcol += w;
+    i += n;
+}
+</code></pre></div>
+<h3>6.3 光标投影</h3>
+<div class="codecard"><div class="codehead">光标字节偏移 → 终端行列</div><pre><code>
+Buffer *b = app_buffer(a);
+
+int line = buf_line_of_offset(b, (size_t)b-&gt;cursor);  /* 字节 → 行 */
+int vcol = buf_visual_col(b, (size_t)b-&gt;cursor);      /* 字节 → 显示列 */
+
+int y = a-&gt;content_top + line - b-&gt;scroll_line;       /* 屏幕行 */
+int x = a-&gt;lw + 1 + a-&gt;gutter_w + 3
+        + vcol - b-&gt;scroll_col;                       /* 屏幕列 */
+
+if (line &gt;= b-&gt;scroll_line &amp;&amp;
+    line &lt; b-&gt;scroll_line + a-&gt;ed_h &amp;&amp;
+    x &lt; a-&gt;lw + 1 + a-&gt;cw) {
+    a-&gt;cursor_y = y;
+    a-&gt;cursor_x = x;
+    a-&gt;show_cursor = true;
+}
+</code></pre><p class="codenote">光标不是屏幕坐标；它是 Buffer 字节偏移，每帧重新投影。</p></div><div class="codecard"><div class="codehead">鼠标坐标 → 字节偏移</div><pre><code>
+static bool editor_offset_at(App *a, int x, int y, int *offset)
+{
+    Buffer *b = app_buffer(a);
+
+    int row = y - a-&gt;content_top;
+    int line = b-&gt;scroll_line + row;
+
+    /* 屏幕 x 去掉左栏、行号、分隔符，再加上 scroll_col */
+    int text_x = a-&gt;lw + 1 + a-&gt;gutter_w + 3;
+    int vcol = b-&gt;scroll_col + (x - text_x);
+
+    /* 显示列 → 字节偏移 */
+    *offset = (int)buf_offset_at_visual(b, line, vcol);
+    return true;
+}
+</code></pre></div></section>
+<section id="index">
+<h2>7. 索引与解析：index.c</h2>
+<p>索引器是“启发式 C 解析器”，不是完整 AST。它的目标是给编辑器提供符号、引用和调用关系，而不是编译代码。</p>
+<div class="flowcard"><div class="flowhead">项目加载流水线</div><pre class="flow">
+project_load(root)
+  │
+  ├─ 递归遍历目录，收集 .c/.h/.cpp/...
+  │
+  ├─ 每个文件：
+  │    ├─ file_read_all()
+  │    ├─ lex_source()：跳过注释和字符串，切出 token
+  │    ├─ parse_macro()：识别 #define
+  │    ├─ parse_aggregates()：struct/union/enum/class
+  │    ├─ parse_typedefs()
+  │    ├─ parse_functions()：函数定义/原型 + body 范围
+  │    ├─ parse_variables()：文件作用域全局变量
+  │    └─ 按文件、行号排序符号
+  │
+  └─ Project { files[], syms[], file.sym_start/count }
+</pre></div>
+<h3>7.1 词法分析</h3>
+<p><code>lex_source()</code> 只做词法切分：</p>
+<ul>
+<li>跳过空白、// 注释、/* */ 注释</li>
+<li>识别标识符、数字、字符串、预处理行、标点</li>
+<li>记录每个 token 的起始偏移、长度、行列</li>
+</ul>
+<p>它不会理解类型、作用域或表达式树。后面的函数/变量识别靠 token 邻接关系和括号配对。</p>
+
+<h3>7.2 符号识别</h3>
+<table>
+<tr><th>函数</th><th>识别对象</th><th>关键判断</th></tr>
+<tr><td><code>parse_functions</code></td><td>函数定义 / 原型</td><td>标识符后接 <code>(</code>，再匹配括号；后面是 <code>{</code> 还是 <code>;</code> 区分定义和原型</td></tr>
+<tr><td><code>parse_macro</code></td><td>#define</td><td>预处理行，记录宏名与签名</td></tr>
+<tr><td><code>parse_aggregates</code></td><td>struct/union/enum/class</td><td>关键字 + 名称 + 花括号</td></tr>
+<tr><td><code>parse_typedefs</code></td><td>typedef</td><td>typedef 行到分号</td></tr>
+<tr><td><code>parse_variables</code></td><td>全局变量</td><td>文件作用域、类型前缀、分号结束</td></tr>
+</table>
+
+<h3>7.3 调用图：为什么不能靠“同名引用”</h3>
+<p>旧实现把所有同名标识符引用都当成调用，结果变量名、函数名相同就会生成假调用边，递归还可能出现很多重复 <code>main</code>。现在只扫描函数体中的真实调用表达式。</p>
+<div class="codecard"><div class="codehead">build_call_graph() 的核心</div><pre><code>
+for (每个文件) {
+    lex_source(src, len, &amp;lx);
+
+    cur_func = -1;
+    in_body = false;
+
+    for (每个 token t) {
+        /* 根据行号找到当前函数 */
+        while (下一个函数.end_line &lt; t-&gt;line)
+            advance;
+
+        if (t 是当前函数) {
+            if (t == &#x27;{&#x27;)
+                in_body = true;   /* 进入函数体 */
+
+            if (!in_body)
+                continue;         /* 签名行不计调用 */
+
+            if (t 是标识符 &amp;&amp; 下一个 token 是 &#x27;(&#x27; &amp;&amp;
+                不是 if/for/while/sizeof 等关键字) {
+
+                callee = callable_symbol(p, name, current_file);
+
+                if (callee &gt;= 0)
+                    callgraph_add(graph, cur_func, callee,
+                                  file, t-&gt;line, t-&gt;col);
+            }
+        }
+    }
+}
+</code></pre><p class="codenote">调用边同时保存调用发生的 file/line/col，所以点击调用链能跳到调用点，而不是被调用函数的定义行。</p></div><div class="codecard"><div class="codehead">caller_tree_walk()：反向查找调用者</div><pre><code>
+static void caller_tree_walk(Project *p, CallGraph *g,
+                             int symbol, int depth,
+                             IntList *seen, LocationList *out)
+{
+    for (每条边 e) {
+        if (e-&gt;callee != symbol)
+            continue;
+
+        /* 每个函数只出现一次，避免重复 main */
+        if (int_contains(seen, e-&gt;caller))
+            continue;
+
+        intlist_push(seen, e-&gt;caller);
+
+        /* 显示的是调用者函数，但位置用 e-&gt;line/col（调用点） */
+        loclist_push_depth(out,
+                           e-&gt;file_index, e-&gt;line, e-&gt;col,
+                           depth + 1,
+                           p-&gt;syms[e-&gt;caller].signature);
+
+        caller_tree_walk(p, g, e-&gt;caller, depth + 1,
+                         seen, out);
+    }
+}
+</code></pre></div><div class="note warn">调用图仍是按函数名近似：不做重载解析、虚函数分派、函数指针分析、宏展开。同名 static 函数会优先匹配同文件定义，但跨文件同名全局函数仍可能歧义。</div>
+<h3>7.4 局部变量遮蔽</h3>
+<p>语义高亮必须先判断“当前行是否在某个局部变量作用域内”。局部变量表按函数建立，声明行到函数结束行有效。</p>
+<div class="codecard"><div class="codehead">app_local_in_scope() 的判定</div><pre><code>
+bool app_local_in_scope(App *a, int line,
+                        const char *name, size_t len)
+{
+    for (每个 LocalVar v) {
+        if (line &lt; v-&gt;line || line &gt; v-&gt;end_line)
+            continue;   /* 不在声明之后/函数范围内 */
+
+        if (strlen(v-&gt;name) == len &amp;&amp;
+            memcmp(v-&gt;name, name, len) == 0)
+            return true;
+    }
+    return false;
+}
+</code></pre><p class="codenote">渲染时先查局部变量，再查全局变量，所以同名时局部变量胜出。</p></div></section>
+<section id="features">
+<h2>8. 功能模块：从核心能力到编辑器体验</h2>
+<h3>8.1 文件大纲</h3>
+<p><code>app_refresh_outline()</code> 从当前文件的符号区间生成 <code>View</code>，按源码行号排序；选中项跟随编辑器光标。</p>
+<h3>8.2 CODE 面板</h3>
+<p><code>app_update_info()</code> 找光标下标识符，解析符号/局部变量，打开定义文件（如果不在当前 Buffer），设置 <code>info_code_start</code>/<code>info_def_end</code>。顶部固定两行显示符号种类、名字、定义位置。</p>
+<h3>8.3 调用链与同名函数选择</h3>
+<p>点击函数名时，如果项目里存在多个同名函数定义，打开 <code>SELECT DEFINITION</code> 选择框。确认后把调用链固定到指定符号；点击调用者时跳到真实调用点。</p>
+<h3>8.4 菜单与项目选择</h3>
+<p>顶端菜单是 <code>app_menu_*</code> + <code>draw_menu()</code>；项目目录选择是 <code>dir_picker_*</code> + <code>draw_dir_picker()</code>。打开项目时浏览目录，新建项目先选父目录再输入名字。</p>
+<h3>8.5 代码整理</h3>
+<p><code>format_ansi_source()</code> 是内置的 ANSI 风格整理器：4 空格缩进、函数左大括号独占一行、控制语句同行。预处理行和反斜杠续行原样保留，避免宏被破坏。</p>
+<h3>8.6 导航历史</h3>
+<p>每次跳转前 <code>app_push_location()</code> 记录路径、光标、滚动位置；<code>app_go_back()</code>/<code>app_go_forward()</code> 在跳转栈中移动。前进历史为空时回到 <code>home</code>。</p>
+</section>
+
+<section id="hard">
+<h2>9. 难点、症状与解决方式</h2>
+<p>这一章按“遇到了什么问题、根因是什么、代码怎么修”组织，适合对照源码阅读。</p>
+<table>
+<tr><th>问题/症状</th><th>根因</th><th>解决</th></tr>
+<tr><td>只有第一行有语法高亮</td><td>语法 span 使用文件绝对偏移，渲染却按行内相对偏移比较</td><td><code>syntax_line_spans()</code> 减去行起点，改成行内相对 span</td></tr>
+<tr><td>全局变量没有颜色</td><td>空白和标识符 span 被合并，语义阶段看到的是带空格的一整段</td><td>普通 span 不再合并，逐个标识符判断</td></tr>
+<tr><td>同名局部变量仍显示全局红色</td><td>语义颜色只查全局表，没有作用域判断</td><td>建立函数级 <code>LocalVar</code> 表，局部优先</td></tr>
+<tr><td>调用链出现很多重复 main</td><td>用“所有同名引用”推调用者，变量同名也变成边；递归没有全局去重</td><td>只扫描函数体内 <code>name(</code>；边保存调用点；seen 去重</td></tr>
+<tr><td>同名函数无法区分</td><td>按名字查符号只返回第一个</td><td>收集所有定义，弹 <code>SELECT DEFINITION</code>，选完固定 context_sym</td></tr>
+<tr><td>点击调用链跳到函数开头</td><td>节点只保存函数定义位置</td><td>CallEdge 记录调用点 file/line/col，节点位置用调用点</td></tr>
+<tr><td>光标渲染时到处闪</td><td>整帧绘制过程中真实终端光标可见，被每个 sgr_move 带着跑</td><td>绘制前 <code>?25l</code> 隐藏，结束后定位再 <code>?25h</code></td></tr>
+<tr><td>整帧撕裂/闪屏</td><td>终端逐条处理转义序列，可能显示半帧</td><td>使用同步输出 <code>?2026h</code>/<code>?2026l</code></td></tr>
+<tr><td>菜单打开时闪</td><td>1003 鼠标移动事件持续触发整屏重绘</td><td>菜单打开时关闭 1003，关闭时恢复</td></tr>
+<tr><td>切换项目崩溃</td><td>释放 View.items 后没有清零 cap，view_add 继续用旧 cap 写 NULL</td><td>释放后 <code>items=NULL; cap=0</code></td></tr>
+<tr><td>宏多时代码整理破坏宏</td><td>普通缩进器把 <code>#define</code> 续行当代码</td><td>识别 <code>#</code> 行和反斜杠续行，原样保留</td></tr>
+<tr><td>鼠标悬停分隔条不知道可拖</td><td>终端不能改 OS 鼠标指针形状</td><td>分隔条画 <code>↔/↕</code>，状态栏显示比例</td></tr>
+<tr><td>鼠标拖动分隔条难命中</td><td>分隔线只有一列/一行</td><td>命中区域扩到上下/左右邻格，实时显示比例</td></tr>
+<tr><td>删除字节后行号错乱</td><td>缓存了旧的 lines[]</td><td><code>lines_valid=false</code>，惰性重建</td></tr>
+<tr><td>上下移动在短行后丢列</td><td>用当前行的列而不是目标列</td><td><code>goal_col</code> 保存目标显示列</td></tr>
+</table>
+</section>
+
+<section id="tests">
+<h2>10. 测试、调试与验证</h2>
+<div class="grid">
+<div class="panel"><h4>test_core</h4><p>缓冲区、UTF-8、语法 span、索引器、引用、调用图的纯逻辑测试。</p></div>
+<div class="panel"><h4>test_keys</h4><p>终端转义序列解析：方向键、F 键、Alt、SGR 鼠标。</p></div>
+<div class="panel"><h4>ui_smoke</h4><p>无终端驱动 App：布局、焦点、鼠标、菜单、项目选择、格式化、渲染帧。</p></div>
+<div class="panel"><h4>ASAN</h4><p>核心和 UI 测试都在 AddressSanitizer 下运行，检查越界、释放后使用、泄漏。</p></div>
+</div>
+<h3>为什么 UI 可以无终端测试</h3>
+<p><code>App</code> 的布局使用 <code>force_rows/force_cols</code>，渲染把 ANSI 写入 <code>Str</code> 而不是直接写终端。所以测试可以直接构造 App、调用 <code>app_handle_key_event()</code>、<code>app_handle_mouse_event()</code>、<code>app_render()</code>，然后检查状态和输出。</p>
+<pre class="flow">项目加载 → 打开文件 → 模拟按键 → 检查 cursor/buffer/视图 → 渲染 → 检查 ANSI 输出</pre>
+<h3>建议的调试顺序</h3>
+<ol>
+<li>先跑 <code>make test</code>，确认核心逻辑。</li>
+<li>用 <code>ui_smoke</code> 重现 UI 行为，不加终端依赖。</li>
+<li>看 <code>ui_smoke</code> 输出的 ANSI 帧，确认布局和颜色。</li>
+<li>用 ASAN 跑同样的测试，定位内存问题。</li>
+<li>真实终端只用于验证鼠标、raw mode、终端能力。</li>
+</ol>
+</section>
+
+<section id="map">
+<h2>11. 函数地图（按源码位置）</h2>
+<table>
+<tr><th>位置</th><th>函数</th><th>职责</th></tr>
+<tr><td>main.c:155</td><td>main</td><td>命令行解析、批处理、启动 ui_run</td></tr>
+<tr><td>app.c:94</td><td>app_layout</td><td>计算五块面板的行列布局</td></tr>
+<tr><td>app.c:301</td><td>app_refresh_outline</td><td>当前文件符号 → 左侧大纲</td></tr>
+<tr><td>app.c:464</td><td>app_open_file_index</td><td>打开项目文件、刷新视图、重置信息</td></tr>
+<tr><td>app.c:616</td><td>app_go_back</td><td>后退历史</td></tr>
+<tr><td>app.c:642</td><td>app_go_forward</td><td>前进历史；尽头回 home</td></tr>
+<tr><td>app.c:689</td><td>app_ensure_visible</td><td>调整 scroll_line/scroll_col 保证光标可见</td></tr>
+<tr><td>app.c:735</td><td>insert_at_cursor</td><td>插入字符并移动光标</td></tr>
+<tr><td>app.c:809</td><td>move_vertical</td><td>上下移动，保持 goal_col</td></tr>
+<tr><td>app.c:1368</td><td>app_rebuild_locals</td><td>扫描函数体，建立局部变量表</td></tr>
+<tr><td>app.c:1522</td><td>app_update_info</td><td>更新 CODE 面板的符号/定义/代码范围</td></tr>
+<tr><td>app.c:2088</td><td>app_show_context</td><td>构建调用链或同名函数选择</td></tr>
+<tr><td>app.c:2663</td><td>app_change_project</td><td>切换项目，关闭旧 Buffer，重新索引</td></tr>
+<tr><td>app.c:3562</td><td>app_handle_editor_key</td><td>编辑器的按键命令</td></tr>
+<tr><td>app.c:3914</td><td>editor_offset_at</td><td>鼠标坐标 → Buffer 字节偏移</td></tr>
+<tr><td>app.c:4257</td><td>app_handle_key</td><td>事件优先级分发</td></tr>
+<tr><td>app.c:4551</td><td>ui_run</td><td>初始化、主循环、清理</td></tr>
+<tr><td>text.c:98</td><td>buf_ensure_lines</td><td>重建行起始偏移表</td></tr>
+<tr><td>text.c:170</td><td>buf_line_of_offset</td><td>字节偏移 → 行号（二分）</td></tr>
+<tr><td>text.c:188</td><td>buf_visual_col</td><td>字节偏移 → 显示列</td></tr>
+<tr><td>text.c:220</td><td>buf_offset_at_visual</td><td>显示列 → 字节偏移</td></tr>
+<tr><td>text.c:340</td><td>buf_insert_at</td><td>插入并记录撤销</td></tr>
+<tr><td>text.c:352</td><td>buf_delete_range</td><td>删除并记录撤销</td></tr>
+<tr><td>text.c:369</td><td>buf_undo</td><td>按组撤销</td></tr>
+<tr><td>term.c:553</td><td>term_init</td><td>raw mode、备用屏幕、鼠标模式</td></tr>
+<tr><td>term.c:654</td><td>term_read_key</td><td>解析键盘/鼠标事件</td></tr>
+<tr><td>render.c:195</td><td>draw_code_range</td><td>普通代码行的 UTF-8/滚动/颜色绘制</td></tr>
+<tr><td>render.c:359</td><td>draw_editor_row</td><td>行号 + 代码</td></tr>
+<tr><td>render.c:1354</td><td>draw_content</td><td>五块面板的内容区绘制</td></tr>
+<tr><td>render.c:1452</td><td>app_render</td><td>整帧 ANSI 生成和输出</td></tr>
+<tr><td>index.c:175</td><td>lex_source</td><td>C 词法切分</td></tr>
+<tr><td>index.c:791</td><td>parse_functions</td><td>函数定义/原型识别</td></tr>
+<tr><td>index.c:1000</td><td>parse_source</td><td>单文件解析入口</td></tr>
+<tr><td>index.c:1192</td><td>project_load</td><td>扫描项目、建立符号索引</td></tr>
+<tr><td>index.c:1553</td><td>build_call_graph</td><td>真实调用关系图</td></tr>
+<tr><td>index.c:1661</td><td>project_caller_tree</td><td>反向调用者树</td></tr>
+<tr><td>index.c:1711</td><td>project_context</td><td>调用者/被调用者/引用数</td></tr>
+</table>
+</section>
+
+<section id="reading">
+<h2>12. 初级程序员阅读顺序</h2>
+<p>不要从 4600 行的 app.c 第一行往下读。按下面顺序，先建立“编辑 → 缓冲区 → 屏幕”的闭环：</p>
+<ol>
+<li><b>先看 main.c + ui_run</b>：知道程序启动、循环、退出。</li>
+<li><b>看 text.h 的 Buffer</b>：知道一个文件如何存储在内存。</li>
+<li><b>看 buffer_apply / buf_insert_at / buf_delete_range</b>：真正修改文本。</li>
+<li><b>看 app.c 的 insert_at_cursor / app_ensure_visible / move_vertical</b>：编辑命令如何改 cursor 和 scroll。</li>
+<li><b>看 render.c 的 app_render / draw_content / draw_editor_row</b>：如何把 Buffer 投影到屏幕。</li>
+<li><b>看 editor_offset_at 和光标定位</b>：鼠标和光标如何反推。</li>
+<li><b>看 term.c 的 term_init / term_read_key</b>：输入从哪来。</li>
+<li><b>最后看 index.c</b>：符号、引用、调用图如何供 UI 使用。</li>
+</ol>
+<h3>练习建议</h3>
+<ul>
+<li>把 <code>draw_content()</code> 里的 <code>line = scroll_line + row</code> 改成别的公式，观察滚动行为。</li>
+<li>在 <code>insert_at_cursor()</code> 里加日志，打印 <code>cursor</code> 和 <code>data</code>，观察每次输入的字节变化。</li>
+<li>把光标隐藏序列删掉，对比“绘制时光标乱跳”的现象。</li>
+<li>用 <code>ui_smoke</code> 写一个小测试，模拟点击某个坐标，检查 <code>b->cursor</code>。</li>
+</ul>
+</section>
+
+<section id="glossary">
+<h2>13. 术语表</h2>
+<table>
+<tr><th>术语</th><th>含义</th></tr>
+<tr><td>raw mode</td><td>终端不做行缓冲、不回显、不把 Ctrl+C 转成信号，程序直接读按键字节</td></tr>
+<tr><td>ANSI escape</td><td>以 ESC 开头的控制序列，例如光标移动、颜色、清屏</td></tr>
+<tr><td>SGR</td><td>Select Graphic Rendition，颜色/粗体；鼠标扩展也常用 SGR 格式</td></tr>
+<tr><td>Buffer</td><td>一个打开文件的内存表示：连续 data + 行索引 + 光标 + 撤销栈</td></tr>
+<tr><td>scroll_line</td><td>屏幕第一行对应 Buffer 的哪一行</td></tr>
+<tr><td>goal_col</td><td>上下移动时希望保持的显示列</td></tr>
+<tr><td>span</td><td>一行内具有同一种高亮类型的字节区间</td></tr>
+<tr><td>可见窗口</td><td>Buffer 中当前真正显示在屏幕上的行/列范围</td></tr>
+<tr><td>同步输出</td><td><code>?2026h/l</code>，让终端把整帧缓存后一次性显示，减少撕裂</td></tr>
+</table>
+<div class="totop"><a href="#overview">↑ 回到开头</a> · <span class="small">文档由源码结构与实际实现整理，命令和测试以仓库状态为准。</span></div>
+</section>
+</div></main></body></html>
