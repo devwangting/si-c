@@ -23,6 +23,8 @@ static void app_toggle_highlight(App *a);
 static void app_chooser_open(App *a, const IntList *defs, const char *word);
 static void app_menu_open(App *a);
 static void app_prompt_begin(App *a, PromptKind kind, const char *initial);
+static void app_project_picker_close(App *a);
+static void app_request_quit(App *a);
 
 typedef struct {
     const char *root;
@@ -37,6 +39,10 @@ static void app_schedule_relations(App *a)
     a->relations_large_prompt = false;
     a->relation_ready_prompt = false;
 
+    if (!a->project.root || a->project.file_count == 0) {
+        a->relations_large_skipped = false;
+        return;
+    }
     if (a->project.relations_ready) {
         a->relations_large_skipped = false;
         a->relation_edges = (size_t)project_call_edge_count(&a->project);
@@ -3041,6 +3047,50 @@ static void app_set_home(App *a)
     a->home_valid = true;
 }
 
+static void app_recent_touch(App *a, const char *root)
+{
+    char *abs;
+    size_t i;
+
+    if (!root || !*root)
+        return;
+    abs = path_abs(root);
+    if (!abs || !*abs) {
+        free(abs);
+        return;
+    }
+    for (i = 0; i < a->recent_projects.count; i++) {
+        if (strcmp(a->recent_projects.items[i], abs) == 0) {
+            free(a->recent_projects.items[i]);
+            memmove(&a->recent_projects.items[i],
+                    &a->recent_projects.items[i + 1],
+                    (a->recent_projects.count - i - 1) * sizeof(char *));
+            a->recent_projects.count--;
+            break;
+        }
+    }
+    if (a->recent_projects.count == a->recent_projects.cap) {
+        a->recent_projects.cap = a->recent_projects.cap
+                                     ? a->recent_projects.cap * 2
+                                     : 8;
+        a->recent_projects.items =
+            xrealloc(a->recent_projects.items,
+                     a->recent_projects.cap * sizeof(char *));
+    }
+    memmove(&a->recent_projects.items[1], &a->recent_projects.items[0],
+            a->recent_projects.count * sizeof(char *));
+    a->recent_projects.items[0] = abs;
+    a->recent_projects.count++;
+}
+
+static void app_save_state(App *a)
+{
+    Buffer *b = app_buffer(a);
+    state_save(a->project.root, b ? b->path : NULL, b ? b->cursor : 0,
+               b ? b->scroll_line : 0, b ? b->scroll_col : 0,
+               &a->recent_projects);
+}
+
 static bool app_change_project(App *a, const char *root, bool create)
 {
     Project np;
@@ -3165,6 +3215,9 @@ static bool app_change_project(App *a, const char *root, bool create)
     }
     app_set_home(a);
     app_schedule_relations(a);
+    app_recent_touch(a, a->project.root ? a->project.root : root);
+    app_project_picker_close(a);
+    app_save_state(a);
     app_set_status(a, "Project %s: %lu files, %lu symbols",
                    a->project.root ? a->project.root : root,
                    (unsigned long)a->project.file_count,
@@ -3419,6 +3472,163 @@ static void dir_picker_handle(App *a, KeyEvent *ev)
         return;
     }
     dir_picker_fix(a);
+}
+
+/* ------------------------------------------------------------------ */
+/* Recent project picker                                               */
+/* ------------------------------------------------------------------ */
+
+static int app_project_picker_visible(App *a)
+{
+    int boxh = SI_MIN(APP_PROJECT_PICKER_MAX_H, a->rows - 4);
+    int rows = boxh - 5;
+    return rows > 1 ? rows : 1;
+}
+
+static void app_project_picker_fix(App *a)
+{
+    int count = (int)a->recent_projects.count;
+    int visible = app_project_picker_visible(a);
+    if (a->project_sel < 0)
+        a->project_sel = 0;
+    if (a->project_sel >= count)
+        a->project_sel = count > 0 ? count - 1 : 0;
+    if (a->project_sel < a->project_scroll)
+        a->project_scroll = a->project_sel;
+    if (a->project_sel >= a->project_scroll + visible)
+        a->project_scroll = a->project_sel - visible + 1;
+    if (a->project_scroll > count - visible)
+        a->project_scroll = count - visible;
+    if (a->project_scroll < 0 || count == 0)
+        a->project_scroll = 0;
+}
+
+static void app_project_picker_close(App *a)
+{
+    if (!a->project_picker_active)
+        return;
+    a->project_picker_active = false;
+    a->project_sel = 0;
+    a->project_scroll = 0;
+    term_mouse_hover(true);
+}
+
+void app_project_picker_open(App *a)
+{
+    a->project_picker_active = true;
+    a->project_sel = 0;
+    a->project_scroll = 0;
+    app_project_picker_fix(a);
+    term_mouse_hover(false);
+    if (a->recent_projects.count == 0) {
+        app_set_status(a,
+            "No project open. Ctrl+O open folder, Ctrl+N new project");
+    } else {
+        app_set_status(a,
+            "No project open. Up/Down select, Enter open, Ctrl+O / Ctrl+N");
+    }
+}
+
+static void app_project_picker_enter(App *a)
+{
+    const char *path;
+
+    if (a->project_sel < 0 ||
+        (size_t)a->project_sel >= a->recent_projects.count) {
+        app_set_status(a, "No recent project selected");
+        return;
+    }
+    path = a->recent_projects.items[a->project_sel];
+    if (!path_is_dir(path)) {
+        app_set_status(a, "Project folder not found: %s", path);
+        return;
+    }
+    app_change_project(a, path, false);
+}
+
+static void app_project_picker_handle(App *a, KeyEvent *ev)
+{
+    int visible = app_project_picker_visible(a);
+    int count = (int)a->recent_projects.count;
+
+    if (ev->code == KEY_MOUSE) {
+        int boxw = SI_MIN(APP_PROJECT_PICKER_MAX_W, a->cols - 4);
+        int boxh = SI_MIN(APP_PROJECT_PICKER_MAX_H, a->rows - 4);
+        int x = (a->cols - boxw) / 2;
+        int y = (a->rows - boxh) / 2;
+        int mx = ev->mouse_x;
+        int my = ev->mouse_y;
+
+        if (boxw < 40 || boxh < 8)
+            return;
+        if (ev->mouse_button == 64 || ev->mouse_button == 65) {
+            a->project_sel += ev->mouse_button == 64 ? -1 : 1;
+            app_project_picker_fix(a);
+            return;
+        }
+        if (ev->mouse_release || ev->mouse_button != 0)
+            return;
+        if (mx <= x || mx >= x + boxw || my <= y || my >= y + boxh) {
+            app_project_picker_close(a);
+            app_set_status(a,
+                "No project open. Ctrl+O open folder, Ctrl+N new project");
+            return;
+        }
+        if (my >= y + 3 && my < y + boxh - 2) {
+            int idx = a->project_scroll + (my - (y + 3));
+            if (idx >= 0 && idx < count) {
+                a->project_sel = idx;
+                app_project_picker_enter(a);
+            }
+        }
+        return;
+    }
+    if (ev->code == KEY_ESC) {
+        app_project_picker_close(a);
+        app_set_status(a,
+            "No project open. Ctrl+O open folder, Ctrl+N new project");
+        return;
+    }
+    if (ev->code == 17) { /* Ctrl+Q */
+        app_request_quit(a);
+        return;
+    }
+    if (ev->code == 15) { /* Ctrl+O */
+        dir_picker_open(a, false);
+        return;
+    }
+    if (ev->code == 14) { /* Ctrl+N */
+        dir_picker_open(a, true);
+        return;
+    }
+    if (ev->code == KEY_F1 || ev->code == 8) { /* F1 / Ctrl+H */
+        a->help = true;
+        return;
+    }
+    if (ev->code == KEY_ALT_CHAR && ev->len > 0 &&
+        (ev->text[0] == 'm' || ev->text[0] == 'M')) {
+        app_menu_open(a);
+        return;
+    }
+    if (ev->code == KEY_UP) {
+        a->project_sel--;
+    } else if (ev->code == KEY_DOWN) {
+        a->project_sel++;
+    } else if (ev->code == KEY_PGUP) {
+        a->project_sel -= visible;
+    } else if (ev->code == KEY_PGDN) {
+        a->project_sel += visible;
+    } else if (ev->code == KEY_HOME) {
+        a->project_sel = 0;
+    } else if (ev->code == KEY_END) {
+        a->project_sel = count - 1;
+    } else if (ev->code == KEY_ENTER) {
+        app_project_picker_enter(a);
+        return;
+    } else {
+        return;
+    }
+    app_project_picker_fix(a);
 }
 
 /* ------------------------------------------------------------------ */
@@ -4920,6 +5130,10 @@ static void app_handle_key(App *a, KeyEvent *ev)
         app_prompt_handle(a, ev);
         return;
     }
+    if (a->project_picker_active) {
+        app_project_picker_handle(a, ev);
+        return;
+    }
     if (ev->code == KEY_MOUSE) {
         app_handle_mouse(a, ev);
         return;
@@ -5337,91 +5551,106 @@ int ui_run(const char *root, const char *initial_file, const char *theme,
 
     memset(&a, 0, sizeof(a));
     memset(&project, 0, sizeof(project));
+    strlist_init(&a.recent_projects);
     a.active = -1;
     a.active_project_file = -1;
     a.pending_info_sym = -1;
     a.prompt = PROMPT_NONE;
     a.focus = FOCUS_EDITOR;
     app_use_theme(&a, theme);
+    state_load(NULL, NULL, NULL, &a.recent_projects);
 
     if (!term_init(&err)) {
         fprintf(stderr, "si: %s\n", err ? err : "cannot initialize terminal");
+        strlist_free(&a.recent_projects);
         free(err);
         return 2;
     }
 
-    ctx.root = root;
-    draw_build_progress(root, "LOADING PROJECT", 0, 0,
-                        "restoring project and index...", false);
-    if (!project_load_cached(&project, root, index_progress, &ctx, &err,
-                             &from_cache)) {
-        term_shutdown();
-        fprintf(stderr, "si: %s\n", err ? err : "cannot index project");
-        free(err);
-        return 1;
-    }
-    {
-        KeyEvent junk;
-        while (term_poll_key(&junk) > 0)
-            ;
-    }
-    a.project = project;
-    /* Persist symbols immediately; relations are added after they build. */
-    if (!from_cache)
-        project_cache_save(&a.project, NULL);
-    app_rebuild_globals(&a);
-    app_layout(&a);
-
-    if (initial_file && *initial_file) {
-        int fi = project_file_index_of_path(&a.project, initial_file);
-        if (fi < 0)
-            fi = project_find_file_by_rel(&a.project, initial_file);
-        if (fi >= 0)
-            app_open_file_index(&a, fi, 1, 0, false);
-        else
-            app_open_path(&a, initial_file, 1, false);
-    }
-    if (!app_buffer(&a)) {
-        if (a.project.file_count > 0)
-            app_open_file_index(&a, 0, 1, 0, false);
-        else
-            app_refresh_outline(&a);
-    }
-    if (a.view.kind == VIEW_NONE)
-        app_refresh_outline(&a);
-
-    if (initial_cursor > 0) {
-        Buffer *rb = app_buffer(&a);
-        if (rb) {
-            if (initial_cursor > (int)rb->len)
-                initial_cursor = (int)rb->len;
-            buf_set_cursor(rb, (size_t)initial_cursor);
-            rb->goal_col = buf_visual_col(rb, (size_t)rb->cursor);
-            app_ensure_visible(&a);
+    if (root && *root) {
+        ctx.root = root;
+        draw_build_progress(root, "LOADING PROJECT", 0, 0,
+                            "restoring project and index...", false);
+        if (!project_load_cached(&project, root, index_progress, &ctx, &err,
+                                 &from_cache)) {
+            term_shutdown();
+            fprintf(stderr, "si: %s\n", err ? err : "cannot index project");
+            free(err);
+            strlist_free(&a.recent_projects);
+            project_free(&project);
+            return 1;
         }
+        {
+            KeyEvent junk;
+            while (term_poll_key(&junk) > 0)
+                ;
+        }
+        a.project = project;
+        /* Persist symbols immediately; relations are added after they build. */
+        if (!from_cache)
+            project_cache_save(&a.project, NULL);
+        app_rebuild_globals(&a);
+        app_layout(&a);
+
+        if (initial_file && *initial_file) {
+            int fi = project_file_index_of_path(&a.project, initial_file);
+            if (fi < 0)
+                fi = project_find_file_by_rel(&a.project, initial_file);
+            if (fi >= 0)
+                app_open_file_index(&a, fi, 1, 0, false);
+            else
+                app_open_path(&a, initial_file, 1, false);
+        }
+        if (!app_buffer(&a)) {
+            if (a.project.file_count > 0)
+                app_open_file_index(&a, 0, 1, 0, false);
+            else
+                app_refresh_outline(&a);
+        }
+        if (a.view.kind == VIEW_NONE)
+            app_refresh_outline(&a);
+
+        if (initial_cursor > 0) {
+            Buffer *rb = app_buffer(&a);
+            if (rb) {
+                if (initial_cursor > (int)rb->len)
+                    initial_cursor = (int)rb->len;
+                buf_set_cursor(rb, (size_t)initial_cursor);
+                rb->goal_col = buf_visual_col(rb, (size_t)rb->cursor);
+                app_ensure_visible(&a);
+            }
+        }
+
+        a.file_sel = app_active_file_index(&a);
+        if (a.file_sel < 0)
+            a.file_sel = 0;
+        file_selection_fix(&a);
+        a.focus = FOCUS_EDITOR;
+        app_set_home(&a);
+        app_schedule_relations(&a);
+        app_recent_touch(&a, a.project.root ? a.project.root : root);
+        app_save_state(&a);
+
+        if (from_cache)
+            app_set_status(&a,
+                "Loaded cached index: %lu files, %lu symbols (F5 reindex)",
+                (unsigned long)a.project.file_count,
+                (unsigned long)a.project.sym_count);
+        else if (a.project.warnings > 0)
+            app_set_status(&a, "Indexed %lu files, %lu symbols, %d warnings (F5 reindex)",
+                           (unsigned long)a.project.file_count,
+                           (unsigned long)a.project.sym_count,
+                           a.project.warnings);
+        else
+            app_set_status(&a, "Indexed %lu files, %lu symbols. F1 help",
+                           (unsigned long)a.project.file_count,
+                           (unsigned long)a.project.sym_count);
+    } else {
+        app_layout(&a);
+        app_refresh_outline(&a);
+        a.focus = FOCUS_EDITOR;
+        app_project_picker_open(&a);
     }
-
-    a.file_sel = app_active_file_index(&a);
-    if (a.file_sel < 0)
-        a.file_sel = 0;
-    file_selection_fix(&a);
-    a.focus = FOCUS_EDITOR;
-    app_set_home(&a);
-    app_schedule_relations(&a);
-
-    if (from_cache)
-        app_set_status(&a,
-            "Loaded cached index: %lu files, %lu symbols (F5 reindex)",
-            (unsigned long)a.project.file_count,
-            (unsigned long)a.project.sym_count);
-    else if (a.project.warnings > 0)
-        app_set_status(&a, "Indexed %lu files, %lu symbols, %d warnings (F5 reindex)",
-                       (unsigned long)a.project.file_count,
-                       (unsigned long)a.project.sym_count, a.project.warnings);
-    else
-        app_set_status(&a, "Indexed %lu files, %lu symbols. F1 help",
-                       (unsigned long)a.project.file_count,
-                       (unsigned long)a.project.sym_count);
 
     while (!a.quit) {
         KeyEvent ev;
@@ -5513,12 +5742,7 @@ int ui_run(const char *root, const char *initial_file, const char *theme,
 
     if (a.project.root && a.project.relations_ready)
         project_cache_save(&a.project, NULL);
-    {
-        Buffer *sb = app_buffer(&a);
-        state_save(a.project.root, sb ? sb->path : NULL,
-                   sb ? sb->cursor : 0, sb ? sb->scroll_line : 0,
-                   sb ? sb->scroll_col : 0);
-    }
+    app_save_state(&a);
     term_shutdown();
     {
         int i;
@@ -5552,6 +5776,7 @@ int ui_run(const char *root, const char *initial_file, const char *theme,
         }
         free(a.locals);
     }
+    strlist_free(&a.recent_projects);
     strlist_free(&a.globals);
     strlist_free(&a.types);
     strlist_free(&a.macros);

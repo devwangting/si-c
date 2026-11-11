@@ -1056,11 +1056,12 @@ static void draw_title(App *a, Str *out)
 {
     Str text;
     int i;
-    const char *rootname;
 
     str_init(&text);
-    rootname = a->project.root ? path_basename(a->project.root) : "project";
-    str_printf(&text, " SI-C  %s  ", rootname);
+    if (a->project.root)
+        str_printf(&text, " SI-C  %s  ", path_basename(a->project.root));
+    else
+        str_puts(&text, " SI-C  [no project]  ");
     if (a->nbuf == 0) {
         str_puts(&text, "[no file]");
     } else {
@@ -1201,6 +1202,12 @@ static void draw_hint(App *a, Str *out)
         hint = " Enter confirm   Esc cancel   Left/Right edit ";
     else if (a->prompt != PROMPT_NONE)
         hint = " Enter execute   Esc cancel   Left/Right edit   Ctrl+U clear ";
+    else if (a->dir_active)
+        hint = " PROJECT FOLDER  Enter select   Backspace parent   Esc cancel ";
+    else if (a->project_picker_active)
+        hint = " RECENT PROJECTS  Up/Down select  Enter open  Ctrl+O browse  Ctrl+N new  Esc close ";
+    else if (!a->project.root)
+        hint = " NO PROJECT  Ctrl+O open folder  Ctrl+N new project  F1 help ";
     else if (a->focus == FOCUS_OUTLINE)
         hint = " OUTLINE  Up/Down select  Enter jumps  Tab focus  Esc editor  F1 help ";
     else if (a->focus == FOCUS_PROJECT)
@@ -1999,6 +2006,116 @@ static void draw_large_project_prompt(App *a, Str *out)
 }
 
 /* ------------------------------------------------------------------ */
+/* Recent project picker overlay                                       */
+/* ------------------------------------------------------------------ */
+
+static void draw_project_picker(App *a, Str *out)
+{
+    int boxw = SI_MIN(APP_PROJECT_PICKER_MAX_W, a->cols - 4);
+    int boxh = SI_MIN(APP_PROJECT_PICKER_MAX_H, a->rows - 4);
+    int x = (a->cols - boxw) / 2;
+    int y = (a->rows - boxh) / 2;
+    int content = boxw - 4;
+    int i;
+    char title[64];
+
+    if (!a->project_picker_active || boxw < 40 || boxh < 8)
+        return;
+
+    if (a->recent_projects.count > 0) {
+        snprintf(title, sizeof(title), "OPEN PROJECT (%lu)",
+                 (unsigned long)a->recent_projects.count);
+    } else {
+        snprintf(title, sizeof(title), "OPEN PROJECT");
+    }
+    for (i = 0; i < boxh; i++) {
+        sgr_move(out, y + i, x);
+        sgr_bg(out, a->theme.panel_alt);
+        sgr_fg(out, a->theme.border);
+        if (i == 0 || i == boxh - 1) {
+            int j;
+            str_puts(out, i == 0 ? "\xe2\x94\x8c" : "\xe2\x94\x94");
+            for (j = 0; j < boxw - 2; j++)
+                str_puts(out, "\xe2\x94\x80");
+            str_puts(out, i == 0 ? "\xe2\x94\x90" : "\xe2\x94\x98");
+        } else {
+            str_puts(out, "\xe2\x94\x82");
+            str_putc(out, ' ');
+            if (i == 1) {
+                sgr_fg(out, a->theme.fg);
+                sgr_bold(out);
+                draw_center(out, title, content);
+                sgr_reset(out);
+                sgr_bg(out, a->theme.panel_alt);
+                sgr_fg(out, a->theme.border);
+                str_putc(out, ' ');
+            } else if (i == 2) {
+                if (a->recent_projects.count > 0) {
+                    const char *label = "Recent projects";
+                    sgr_fg(out, a->theme.dim);
+                    draw_text(out, label, strlen(label), content, false);
+                    if ((int)strlen(label) < content)
+                        draw_spaces(out, content - (int)strlen(label));
+                    sgr_fg(out, a->theme.border);
+                } else {
+                    draw_spaces(out, content);
+                }
+                str_putc(out, ' ');
+            } else if (i < boxh - 2) {
+                int idx = a->project_scroll + (i - 3);
+                if (idx >= 0 && (size_t)idx < a->recent_projects.count) {
+                    const char *path = a->recent_projects.items[idx];
+                    const char *base = path_basename(path);
+                    const char *marker = path_is_dir(path) ? "" : "! ";
+                    char shown[1024];
+                    char label[1400];
+                    int avail;
+                    bool selected = idx == a->project_sel;
+                    bool exists = marker[0] == '\0';
+
+                    avail = content -
+                            (int)utf8_text_width(base, strlen(base)) - 2;
+                    if (avail < 8)
+                        avail = 8;
+                    path_shorten(path, avail, shown, sizeof(shown));
+                    snprintf(label, sizeof(label), "%s%s  %s", marker,
+                             base, shown);
+                    if (selected) {
+                        sgr_bg(out, a->theme.accent_bg);
+                        sgr_fg(out, a->theme.selection_fg);
+                    } else if (!exists) {
+                        sgr_fg(out, a->theme.dim);
+                    } else {
+                        sgr_fg(out, a->theme.fg);
+                    }
+                    draw_text(out, label, strlen(label), content, true);
+                    sgr_reset(out);
+                    sgr_bg(out, a->theme.panel_alt);
+                    sgr_fg(out, a->theme.border);
+                    str_putc(out, ' ');
+                } else {
+                    sgr_fg(out, a->theme.border);
+                    draw_spaces(out, content);
+                    str_putc(out, ' ');
+                }
+            } else {
+                const char *hint =
+                    "Enter open   Ctrl+O browse   Ctrl+N new   Esc close";
+                sgr_fg(out, a->theme.dim);
+                draw_text(out, hint, strlen(hint), content, false);
+                if ((int)strlen(hint) < content)
+                    draw_spaces(out, content - (int)strlen(hint));
+                sgr_fg(out, a->theme.border);
+                str_putc(out, ' ');
+            }
+            str_puts(out, "\xe2\x94\x82");
+        }
+        sgr_reset(out);
+    }
+    a->show_cursor = false;
+}
+
+/* ------------------------------------------------------------------ */
 /* Directory picker overlay                                            */
 /* ------------------------------------------------------------------ */
 
@@ -2472,9 +2589,9 @@ static void draw_splash(App *a, Str *out, int row)
     static const char *const lines[] = {
         "SI-C  Source Insight style C/C++ browser",
         "",
-        "F2 project files   F3 symbols   F12 go to definition",
-        "Ctrl+P symbol search  Ctrl+G go to line  Alt/Opt+G project search",
-        "Ctrl+O project   Ctrl+F find   F8 highlight   F1 help"
+        "Ctrl+O open project   Ctrl+N new project   F1 help",
+        "F2 outline   F3 call flow   F7 project files   F12 definition",
+        "Ctrl+P symbol search   Ctrl+G go to line   Ctrl+F find"
     };
     int start = a->content_height / 2 - 2;
     int li = row - start;
@@ -2669,7 +2786,8 @@ static void draw_content(App *a, Str *out)
         }
     }
 
-    if (!project_relations_ready(&a->project) && a->rw >= 16 &&
+    if (a->project.root && !project_relations_ready(&a->project) &&
+        a->rw >= 16 &&
         !(a->view.kind == VIEW_CONTEXT && a->context_need_relations)) {
         /* No call/var graph yet: keep the CALL FLOW pane explanatory even
          * before the user clicks a function. */
@@ -2768,6 +2886,13 @@ void app_render(App *a)
         draw_content(a, &out);
         draw_hint(a, &out);
         draw_status(a, &out);
+        if (a->project_picker_active && !a->dir_active &&
+            !a->menu_active && !a->chooser_active &&
+            a->prompt == PROMPT_NONE && !a->help &&
+            !a->relation_building && !a->relation_ready_prompt &&
+            !a->relations_large_prompt && !a->context_menu_active) {
+            draw_project_picker(a, &out);
+        }
         if (a->prompt == PROMPT_FIND ||
             a->prompt == PROMPT_GREP ||
             a->prompt == PROMPT_SYMBOL) {
@@ -2800,7 +2925,8 @@ void app_render(App *a)
                               !a->dir_active && !a->relation_building &&
                               !a->relation_ready_prompt &&
                               !a->relations_large_prompt &&
-                              !a->context_menu_active;
+                              !a->context_menu_active &&
+                              !a->project_picker_active;
         if (cursor_visible)
             str_printf(&out, "\x1b[%d;%dH", a->cursor_y + 1,
                        a->cursor_x + 1);

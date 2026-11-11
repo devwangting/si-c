@@ -30,12 +30,14 @@ static void usage(FILE *out)
             "  --version            print version\n"
             "  --help               show this help\n\n"
             "Interactive keys:\n"
-            "  F1 help        F2 files       F3 symbols     F4 editor\n"
-            "  F5 reindex     F6 focus       F12 definition Shift+F12 refs\n"
-            "  Ctrl+P symbol  Ctrl+G grep    Ctrl+F find     F8 find next\n"
-            "  Ctrl+O open    Ctrl+L line    Ctrl+S save     Ctrl+Q quit\n"
-            "  Ctrl+Z/Y undo/redo        Alt/Opt+Left back   F9 next file\n\n"
-            "If PATH is a file, its directory is indexed and the file is opened.\n"
+            "  F1 help        F2 outline     F3 call-flow   F4 editor\n"
+            "  F5 reindex     F6 format      F7 files       F12 definition\n"
+            "  Shift+F12 refs Ctrl+P symbols Ctrl+G line    Ctrl+F find\n"
+            "  Ctrl+O open project            Ctrl+N new project\n"
+            "  Ctrl+S save    Ctrl+Q quit     Ctrl+Z/Y undo/redo\n\n"
+            "With no PATH, si starts with an empty workspace and shows\n"
+            "recently opened projects. If PATH is a file, its directory is\n"
+            "indexed and the file is opened.\n"
             "No ncurses or other third-party libraries are required.\n",
             SI_VERSION);
 }
@@ -177,24 +179,12 @@ int main(int argc, char **argv)
         theme = getenv("SI_THEME");
 
     /*
-     * With no explicit path, restore the last project and cursor.  An
-     * explicit path always wins, so `si /other/project` behaves normally.
+     * An explicit path always wins, so `si /other/project` behaves
+     * normally.  With no path, the interactive UI starts empty and
+     * `ui_run()` shows the recent-project picker.  Batch modes still
+     * default to the current directory.
      */
-    if (!arg_path && mode == MODE_UI) {
-        char *sroot = NULL;
-        char *sfile = NULL;
-        int scursor = 0;
-        if (state_load(&sroot, &sfile, &scursor) &&
-            sroot && path_is_dir(sroot)) {
-            root = sroot;
-            initial = sfile;
-            initial_cursor = scursor;
-        } else {
-            free(sroot);
-            free(sfile);
-        }
-    }
-    if (!root) {
+    if (!(mode == MODE_UI && !arg_path)) {
         if (!arg_path)
             arg_path = ".";
         {

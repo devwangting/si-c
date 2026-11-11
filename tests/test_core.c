@@ -4,6 +4,11 @@
 
 #include <math.h>
 
+#ifndef _WIN32
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
+
 static int failures;
 static int checks;
 static int cache_ticks;
@@ -297,6 +302,117 @@ static void test_project(const char *root)
     }
 }
 
+#ifndef _WIN32
+static void test_state(void)
+{
+    const char *tmp = getenv("TMPDIR");
+    char tmpl[1024];
+    char *home;
+    char *old_home = getenv("HOME") ? xstrdup(getenv("HOME")) : NULL;
+    char *path;
+    StrList recent;
+
+    snprintf(tmpl, sizeof(tmpl), "%s/si-state-XXXXXX",
+             tmp && *tmp ? tmp : "/tmp");
+    home = mkdtemp(tmpl);
+    check(home != NULL, "state temp home");
+    if (!home) {
+        free(old_home);
+        return;
+    }
+    setenv("HOME", home, 1);
+    path = state_path();
+    remove(path);
+
+    strlist_init(&recent);
+    strlist_push(&recent, "/tmp/si-project-a");
+    strlist_push(&recent, "/tmp/si-project-b");
+    check(state_save("/tmp/si-project-a", "/tmp/si-project-a/main.c",
+                     12, 3, 4, &recent),
+          "state save with history");
+    {
+        char *saved_root = NULL;
+        char *saved_file = NULL;
+        int cursor = -1;
+        StrList loaded;
+        strlist_init(&loaded);
+        check(state_load(&saved_root, &saved_file, &cursor, &loaded),
+              "state load with history");
+        check(saved_root &&
+                  strcmp(saved_root, "/tmp/si-project-a") == 0,
+              "state root");
+        check(saved_file &&
+                  strcmp(saved_file, "/tmp/si-project-a/main.c") == 0,
+              "state file");
+        check(cursor == 12, "state cursor");
+        check(loaded.count == 2, "state recent count");
+        check(loaded.count > 0 &&
+                  strcmp(loaded.items[0], "/tmp/si-project-a") == 0,
+              "state recent order");
+        check(loaded.count > 1 &&
+                  strcmp(loaded.items[1], "/tmp/si-project-b") == 0,
+              "state recent second");
+        free(saved_root);
+        free(saved_file);
+        strlist_free(&loaded);
+    }
+    check(state_save(NULL, NULL, 0, 0, 0, &recent),
+          "state save without project");
+    {
+        char *saved_root = NULL;
+        StrList loaded;
+        strlist_init(&loaded);
+        check(state_load(&saved_root, NULL, NULL, &loaded),
+              "state load without project");
+        check(saved_root == NULL, "empty state root");
+        check(loaded.count == 2, "empty state keeps history");
+        free(saved_root);
+        strlist_free(&loaded);
+    }
+    {
+        StrList dup;
+        StrList loaded;
+        strlist_init(&dup);
+        strlist_push(&dup, "/tmp/si-project-a");
+        strlist_push(&dup, "/tmp/si-project-a");
+        check(state_save(NULL, NULL, 0, 0, 0, &dup),
+              "state save duplicate history");
+        strlist_init(&loaded);
+        check(state_load(NULL, NULL, NULL, &loaded),
+              "state load duplicate history");
+        check(loaded.count == 1, "state history deduplicated");
+        strlist_free(&dup);
+        strlist_free(&loaded);
+    }
+    {
+        FILE *f = fopen(path, "wb");
+        StrList loaded;
+        check(f != NULL, "legacy state writable");
+        if (f) {
+            fprintf(f, "root=/tmp/si-legacy\nfile=\ncursor=0\n");
+            fclose(f);
+        }
+        strlist_init(&loaded);
+        check(state_load(NULL, NULL, NULL, &loaded),
+              "legacy state load");
+        check(loaded.count == 1 &&
+                  strcmp(loaded.items[0], "/tmp/si-legacy") == 0,
+              "legacy root becomes recent");
+        strlist_free(&loaded);
+    }
+
+    remove(path);
+    strlist_free(&recent);
+    free(path);
+    if (old_home)
+        setenv("HOME", old_home, 1);
+    else
+        unsetenv("HOME");
+    free(old_home);
+    rmdir(home);
+}
+#endif
+
 int main(int argc, char **argv)
 {
     const char *root = argc > 1 ? argv[1] : "tests/fixtures/demo";
@@ -305,6 +421,9 @@ int main(int argc, char **argv)
     test_buffer();
     test_names();
     test_syntax();
+#ifndef _WIN32
+    test_state();
+#endif
     test_project(root);
     printf("%d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;

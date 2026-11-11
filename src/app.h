@@ -103,6 +103,7 @@ typedef struct {
 
 typedef struct {
     Project project;
+    StrList recent_projects;
     StrList globals;
     StrList types;
     StrList macros;
@@ -163,6 +164,10 @@ typedef struct {
     size_t relation_symbols;
     size_t relation_edges;
     size_t relation_vars;
+
+    bool project_picker_active;
+    int project_sel;
+    int project_scroll;
 
     bool dir_active;
     bool dir_for_new;
@@ -291,6 +296,10 @@ void app_handle_key_event(App *a, int code, const char *text);
 void app_handle_mouse_event(App *a, int x, int y, int button, bool release);
 
 #define APP_MENU_GROUPS 4
+#define APP_PROJECT_PICKER_MAX_W 78
+#define APP_PROJECT_PICKER_MAX_H 22
+
+void app_project_picker_open(App *a);
 void app_menu_tab_layout(App *a, int xs[APP_MENU_GROUPS],
                          int ws[APP_MENU_GROUPS]);
 const char *app_menu_group_name(int group);

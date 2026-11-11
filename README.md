@@ -52,6 +52,7 @@ third-party runtime dependencies, and is AI-generated. See
 - **主题与鼠标**：深色/浅色主题，SGR 鼠标点击、拖选、滚轮、四条可拖动分隔条。
 - **项目缓存**：`.si-index` 保存文件、符号、调用边和变量使用关系，按文件大小和
   mtime 校验，减少重复索引。
+- **最近项目**：无参数启动时显示最近打开/创建的项目列表，不自动打开上次项目。
 - **命令行批处理**：`--index`、`--files`、`--symbols`、`--refs`、`--search`。
 - **macOS Option 键支持**：Option 等同于 Alt，并识别默认键盘布局产生的符号。
 
@@ -127,10 +128,15 @@ Makefile 会在 macOS 上自动追加 `-D_DARWIN_C_SOURCE`。如果手动指定
 ```sh
 ./si /path/to/project        # 打开目录，递归索引
 ./si /path/to/project/a.c    # 打开文件，并索引它所在目录
-./si                         # 恢复上次项目、文件和光标位置
+./si                         # 显示最近项目列表，不自动打开
 ```
 
-无参数运行时会从 `~/.si-c-state` 恢复上次状态；显式传入路径时以命令行路径为准。
+无参数运行 `./si` 时不会自动打开上次项目，而是在空工作区弹出最近项目列表；
+从未打开或创建过项目时列表为空，按 `Ctrl+O` 打开目录或 `Ctrl+N` 新建项目。
+显式传入路径时直接打开该路径，并把它加入最近项目。
+
+最近项目列表支持 `Up/Down` 选择、`Enter` 打开、`Ctrl+O` 浏览目录、
+`Ctrl+N` 新建项目、`Esc` 关闭列表。
 
 ## 命令行批处理
 
@@ -246,7 +252,10 @@ ABC/美式键盘下 Option+E 和 Option+I 是死键（要再按一个字符才�
   变量使用表。
 - 再次打开项目时优先加载缓存；源码变化后通过文件大小和修改时间校验并自动重建。
 - 启动和读取缓存时显示 `LOADING` 进度窗口。
-- 无参数运行 `./si` 时，从 `~/.si-c-state` 恢复上次项目、打开文件和光标位置。
+- 无参数运行 `./si` 时，从 `~/.si-c-state` 读取最近打开/创建的项目并显示列表，
+  不会自动打开项目。
+- `~/.si-c-state` 的 `recent=` 行保存项目历史，按最近使用排序；旧版的 `root=`
+  会自动作为第一条历史迁移。
 - 新增/删除文件不会自动增量扫描；按 `F5` 强制重建。
 
 ### 大项目
@@ -337,7 +346,7 @@ docs/          架构说明与生成脚本
 
 ## 测试
 
-当前版本在 macOS 13.7（x86_64）上执行：
+当前 Linux 工作区实测：
 
 ```sh
 make clean && make -j && make test
@@ -346,14 +355,14 @@ make clean && make -j && make test
 结果：
 
 ```text
-test_core: 109 checks, 0 failures
-test_keys:  43 checks, 0 failures
-ui_smoke:  145 checks, 0 failures
+test_core: 128 checks, 0 failures
+test_keys:  26 checks, 0 failures
+ui_smoke:  155 checks, 0 failures
 ```
 
-测试覆盖缓冲区编辑、UTF-8、语法高亮、项目索引、调用关系、终端按键/鼠标解码、
-五面板渲染和主要 UI 动作。macOS Universal（x86_64 + arm64）二进制已构建，
-并用真实 PTY 验证过 Option+M / Option+G / Option+R。
+macOS 的 `test_keys` 还包含 Option 键用例，检查数量会与本机不同。
+测试覆盖缓冲区编辑、UTF-8、语法高亮、项目索引、调用关系、状态历史、终端
+按键/鼠标解码、五面板渲染和主要 UI 动作。
 
 Linux 使用同一套 POSIX 代码路径；建议首次在 Linux 上执行
 `make clean && make -j && make test`。Windows 控制台后端主要用于开发和测试，
@@ -365,6 +374,8 @@ Linux 使用同一套 POSIX 代码路径；建议首次在 Linux 上执行
 - 引用搜索不会进入 `#define` 宏体；`#if`/`#else` 的所有分支都会被扫描。
 - “查找引用”、调用关系和全项目文本搜索读取**磁盘文件**，不包含未保存修改。
 - 文件大纲不会在每次按键后重解析；保存、重开或 `F5` 后更新。
+- 最近项目列表只记录项目根；选中后打开 `main.c` 或第一个文件，不恢复每个项目
+  上次打开的文件和光标。
 - 调用者树最多 8 层、200 个节点；不做重载/虚函数解析，也不构建类继承图。
 - 局部变量使用函数级符号表，块级 `{}` 作用域按函数级近似。
 - CODE 预览对超长函数只显示窗口，可用滚轮 / `PgUp` / `PgDn` 滚动。

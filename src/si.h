@@ -106,11 +106,11 @@ bool file_write_atomic(const char *path, const char *data, size_t len,
                        char **err);
 bool path_stat_info(const char *path, long long *size, long long *mtime);
 
-/* Last project/editor position, stored in the user's home directory. */
+/* Last project/editor position and recent project history. */
 char *state_path(void);
-bool state_load(char **root, char **file, int *cursor);
+bool state_load(char **root, char **file, int *cursor, StrList *recent);
 bool state_save(const char *root, const char *file, int cursor,
-                int scroll_line, int scroll_col);
+                int scroll_line, int scroll_col, const StrList *recent);
 
 /* ------------------------------------------------------------------ */
 /* Directory iteration                                                 */

@@ -750,11 +750,11 @@ char *state_path(void)
     return path_join(home, ".si-c-state");
 }
 
-bool state_load(char **root, char **file, int *cursor)
+bool state_load(char **root, char **file, int *cursor, StrList *recent)
 {
     char *path = state_path();
     FILE *f = fopen(path, "rb");
-    char line[2048];
+    char line[8192];
     char *r = NULL;
     char *fn = NULL;
     int cur = 0;
@@ -784,9 +784,21 @@ bool state_load(char **root, char **file, int *cursor)
             cur = atoi(line + 7);
             if (cur < 0)
                 cur = 0;
+        } else if (recent && strncmp(line, "recent=", 7) == 0) {
+            const char *value = line + 7;
+            if (*value &&
+                !strlist_contains_n(recent, value, strlen(value))) {
+                strlist_push(recent, value);
+            }
         }
     }
     fclose(f);
+    /*
+     * Older state files only have root=.  Keep that project visible in
+     * the picker while the new recent= history is being populated.
+     */
+    if (recent && recent->count == 0 && r && *r)
+        strlist_push(recent, r);
     if (r && *r) {
         if (root) {
             *root = r;
@@ -800,6 +812,8 @@ bool state_load(char **root, char **file, int *cursor)
             *cursor = cur;
         ok = true;
     }
+    if (recent && recent->count > 0)
+        ok = true;
     free(path);
     free(r);
     free(fn);
@@ -807,24 +821,29 @@ bool state_load(char **root, char **file, int *cursor)
 }
 
 bool state_save(const char *root, const char *file, int cursor,
-                int scroll_line, int scroll_col)
+                int scroll_line, int scroll_col, const StrList *recent)
 {
     char *path;
     FILE *f;
+    size_t i;
     bool ok;
-    if (!root || !*root)
-        return false;
     path = state_path();
     f = fopen(path, "wb");
     if (!f) {
         free(path);
         return false;
     }
-    fprintf(f, "root=%s\n", root);
+    fprintf(f, "root=%s\n", root ? root : "");
     fprintf(f, "file=%s\n", file ? file : "");
     fprintf(f, "cursor=%d\n", cursor > 0 ? cursor : 0);
     fprintf(f, "scroll_line=%d\n", scroll_line > 0 ? scroll_line : 0);
     fprintf(f, "scroll_col=%d\n", scroll_col > 0 ? scroll_col : 0);
+    if (recent) {
+        for (i = 0; i < recent->count; i++) {
+            if (recent->items[i] && *recent->items[i])
+                fprintf(f, "recent=%s\n", recent->items[i]);
+        }
+    }
     ok = fflush(f) == 0;
     if (fclose(f) != 0)
         ok = false;

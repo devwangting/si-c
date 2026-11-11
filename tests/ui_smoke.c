@@ -61,6 +61,7 @@ int main(int argc, char **argv)
         return 1;
     }
     memset(&a, 0, sizeof(a));
+    strlist_init(&a.recent_projects);
     a.project = p;
     app_rebuild_globals(&a);
     a.active = -1;
@@ -731,6 +732,56 @@ int main(int argc, char **argv)
     key(&a, 17, NULL); /* Ctrl+Q */
     check(a.quit, "quit after clean buffer");
 
+    /* Recent-project picker: selection, Esc, empty state, outside click. */
+    a.force_rows = 24;
+    a.force_cols = 80;
+    app_layout(&a);
+    strlist_push(&a.recent_projects, root);
+    app_project_picker_open(&a);
+    check(a.project_picker_active, "recent project picker opens");
+    check(a.project_sel == 0, "recent project picker selects first");
+    app_render(&a);
+    key(&a, KEY_ESC, NULL);
+    check(!a.project_picker_active, "recent project picker closes");
+    check(a.project.root != NULL, "project remains after picker closes");
+
+    strlist_free(&a.recent_projects);
+    strlist_init(&a.recent_projects);
+    app_project_picker_open(&a);
+    key(&a, KEY_ENTER, NULL);
+    check(a.project_picker_active, "empty picker stays open");
+    check(strstr(a.status, "No recent project selected") != NULL,
+          "empty picker reports no selection");
+    app_handle_mouse_event(&a, 0, 0, 0, false);
+    check(!a.project_picker_active, "empty picker closes on outside click");
+
+    {
+        App empty;
+        memset(&empty, 0, sizeof(empty));
+        strlist_init(&empty.recent_projects);
+        empty.active = -1;
+        empty.prompt = PROMPT_NONE;
+        empty.focus = FOCUS_EDITOR;
+        app_use_theme(&empty, "dark");
+        empty.force_rows = 24;
+        empty.force_cols = 80;
+        app_layout(&empty);
+        check(empty.project.root == NULL, "empty app has no project");
+        app_project_picker_open(&empty);
+        app_render(&empty);
+        check(empty.project_picker_active, "empty app picker opens");
+        key(&empty, KEY_ESC, NULL);
+        check(!empty.project_picker_active, "empty app picker closes");
+        app_render(&empty);
+        app_view_clear(&empty.view);
+        free(empty.view.items);
+        free(empty.call_boxes);
+        app_view_clear(&empty.outline);
+        free(empty.outline.items);
+        buf_free(empty.info_buffer);
+        strlist_free(&empty.recent_projects);
+    }
+
     a.force_rows = 24;
     a.force_cols = 80;
     app_layout(&a);
@@ -778,6 +829,7 @@ int main(int argc, char **argv)
     free(a.back);
     free(a.fwd);
     free(a.home.path);
+    strlist_free(&a.recent_projects);
     strlist_free(&a.globals);
     strlist_free(&a.types);
     strlist_free(&a.macros);
