@@ -2140,6 +2140,23 @@ static int cmp_complete_group(const void *pa, const void *pb)
     return strcmp(a->name, b->name);
 }
 
+static void completion_measure(App *a)
+{
+    size_t i;
+    a->comp_name_w = 0;
+    a->comp_detail_w = 0;
+    for (i = 0; i < a->comp_count; i++) {
+        int nw = (int)utf8_text_width(a->comp_items[i].name,
+                                      strlen(a->comp_items[i].name));
+        int dw = (int)utf8_text_width(a->comp_items[i].detail,
+                                      strlen(a->comp_items[i].detail));
+        if (nw > a->comp_name_w)
+            a->comp_name_w = nw;
+        if (dw > a->comp_detail_w)
+            a->comp_detail_w = dw;
+    }
+}
+
 static void completion_sort_items(App *a)
 {
     size_t i;
@@ -2330,6 +2347,7 @@ void app_completion_update(App *a)
         return;
     }
     completion_sort_items(a);
+    completion_measure(a);
     if (a->comp_count == 1 && ctx.word_end == b->cursor &&
         strcmp(a->comp_items[0].name, ctx.prefix) == 0) {
         completion_suppress_current(a, ctx.word_start, ctx.prefix, false);
@@ -2441,14 +2459,90 @@ bool app_completion_handle_mouse(App *a, KeyEvent *ev)
 bool app_completion_geometry(App *a, int *x, int *y, int *w, int *h,
                              int *first, int *rows)
 {
-    (void)a;
-    (void)x;
-    (void)y;
-    (void)w;
-    (void)h;
-    (void)first;
-    (void)rows;
-    return false;
+    int top;
+    int bottom;
+    int maxw;
+    int name_w;
+    int detail_w;
+    int boxw;
+    int below_y;
+    int below_avail;
+    int above_avail;
+    int avail;
+    int boxh;
+    int boxy;
+    int boxx;
+    int visible;
+
+    if (!a->comp_active || a->comp_count == 0 || !a->show_cursor)
+        return false;
+    top = a->content_top;
+    bottom = a->content_top + a->content_height - 1;
+    if (bottom < top)
+        return false;
+    maxw = a->cols - 2;
+    name_w = a->comp_name_w;
+    detail_w = a->comp_detail_w;
+    boxw = 4 + name_w;
+    if (detail_w > 0)
+        boxw += 2 + detail_w;
+    if (boxw > maxw)
+        boxw = maxw;
+    if (boxw < 10)
+        return false;
+    below_y = a->cursor_y + 1;
+    below_avail = bottom - below_y + 1;
+    above_avail = a->cursor_y - top;
+    if (below_avail >= 3 || below_avail >= above_avail)
+        avail = below_avail;
+    else
+        avail = above_avail;
+    if (avail < 3)
+        return false;
+    visible = (int)a->comp_count;
+    if (visible > avail - 2)
+        visible = avail - 2;
+    if (visible < 1)
+        return false;
+    boxh = visible + 2;
+    boxy = (avail == below_avail) ? below_y : a->cursor_y - boxh;
+    if (boxy < top)
+        boxy = top;
+    if (boxy + boxh - 1 > bottom)
+        boxy = bottom - boxh + 1;
+    boxx = a->cursor_x;
+    if (boxx + boxw > a->cols - 1)
+        boxx = a->cols - 1 - boxw;
+    if (boxx < 1)
+        boxx = 1;
+    a->comp_popup_rows = visible;
+    if (a->comp_sel < a->comp_scroll)
+        a->comp_scroll = a->comp_sel;
+    if (a->comp_sel >= a->comp_scroll + visible)
+        a->comp_scroll = a->comp_sel - visible + 1;
+    if (a->comp_scroll > (int)a->comp_count - visible)
+        a->comp_scroll = (int)a->comp_count - visible;
+    if (a->comp_scroll < 0)
+        a->comp_scroll = 0;
+    a->comp_popup_x = boxx;
+    a->comp_popup_y = boxy;
+    a->comp_popup_w = boxw;
+    a->comp_popup_h = boxh;
+    a->comp_popup_first = a->comp_scroll;
+    a->comp_popup_rows = visible;
+    if (x)
+        *x = boxx;
+    if (y)
+        *y = boxy;
+    if (w)
+        *w = boxw;
+    if (h)
+        *h = boxh;
+    if (first)
+        *first = a->comp_scroll;
+    if (rows)
+        *rows = visible;
+    return true;
 }
 
 static bool symbol_is_extern_var(const Symbol *s)

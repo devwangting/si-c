@@ -806,6 +806,37 @@ int main(int argc, char **argv)
                   "Alt+M closes completion and opens menu");
             key(&a, KEY_ESC, NULL);
 
+            move_after_anchor(&a, anchor);
+            type_text(&a, "co");
+            check(a.comp_active, "popup active for geometry");
+            app_render(&a);
+            check(a.comp_popup_w > 0 && a.comp_popup_h > 0,
+                  "completion popup has geometry");
+            check(a.comp_popup_y >= a.content_top,
+                  "popup inside content");
+            check(a.comp_popup_y + a.comp_popup_h <=
+                      a.content_top + a.content_height,
+                  "popup avoids hint/status");
+            check(a.comp_popup_rows >= 1, "popup has visible rows");
+            {
+                int before = (int)a.comp_count;
+                int old_rows = a.force_rows;
+                int old_cols = a.force_cols;
+                a.force_rows = 14;
+                a.force_cols = 80;
+                app_layout(&a);
+                app_render(&a);
+                check(a.comp_active && (int)a.comp_count == before,
+                      "small screen keeps all candidates");
+                check(a.comp_popup_w > 0 && a.comp_popup_rows < before,
+                      "small screen scrolls instead of truncating");
+                a.force_rows = old_rows;
+                a.force_cols = old_cols;
+                app_layout(&a);
+                app_render(&a);
+            }
+            key(&a, KEY_ESC, NULL);
+
             app_completion_reset(&a);
             buf_delete_range(b, 0, b->len);
             buf_insert_at(b, 0, orig, orig_len);

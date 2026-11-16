@@ -193,6 +193,8 @@ typedef struct {
     int comp_popup_h;
     int comp_popup_first;
     int comp_popup_rows;
+    int comp_name_w;
+    int comp_detail_w;
     long comp_click_time;
     int comp_click_index;
     int comp_click_x;

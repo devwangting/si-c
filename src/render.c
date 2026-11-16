@@ -1208,6 +1208,8 @@ static void draw_hint(App *a, Str *out)
         hint = " RECENT PROJECTS  Up/Down select  Enter open  Ctrl+O browse  Ctrl+N new  Esc close ";
     else if (!a->project.root)
         hint = " NO PROJECT  Ctrl+O open folder  Ctrl+N new project  F1 help ";
+    else if (a->comp_active)
+        hint = " COMPLETION  Up/Down select  PgUp/PgDn  Tab/Enter accept  Esc close ";
     else if (a->focus == FOCUS_OUTLINE)
         hint = " OUTLINE  Up/Down select  Enter jumps  Tab focus  Esc editor  F1 help ";
     else if (a->focus == FOCUS_PROJECT)
@@ -2486,6 +2488,84 @@ static void draw_chooser(App *a, Str *out)
 }
 
 /* ------------------------------------------------------------------ */
+/* Completion popup                                                    */
+/* ------------------------------------------------------------------ */
+
+static void draw_completion(App *a, Str *out)
+{
+    const Theme *t = &a->theme;
+    int x;
+    int y;
+    int w;
+    int h;
+    int first;
+    int rows;
+    int inner;
+    int i;
+
+    if (!app_completion_geometry(a, &x, &y, &w, &h, &first, &rows))
+        return;
+    inner = w - 2;
+    for (i = 0; i < h; i++) {
+        sgr_move(out, y + i, x);
+        sgr_bg(out, t->panel_alt);
+        sgr_fg(out, t->border);
+        if (i == 0 || i == h - 1) {
+            int j;
+            str_puts(out, i == 0 ? "\xe2\x94\x8c" : "\xe2\x94\x94");
+            for (j = 0; j < inner; j++)
+                str_puts(out, "\xe2\x94\x80");
+            str_puts(out, i == 0 ? "\xe2\x94\x90" : "\xe2\x94\x98");
+            sgr_reset(out);
+            continue;
+        }
+        {
+            int idx = first + (i - 1);
+            int avail = inner - 2;
+            int name_w = a->comp_name_w;
+            bool selected = idx >= 0 && (size_t)idx < a->comp_count &&
+                            idx == a->comp_sel;
+            str_puts(out, "\xe2\x94\x82");
+            if (selected) {
+                sgr_bg(out, t->accent_bg);
+                sgr_fg(out, t->selection_fg);
+            } else {
+                sgr_bg(out, t->panel_alt);
+                sgr_fg(out, t->fg);
+            }
+            str_putc(out, ' ');
+            if (idx >= 0 && (size_t)idx < a->comp_count) {
+                CompleteItem *it = &a->comp_items[idx];
+                if (name_w > avail)
+                    name_w = avail;
+                draw_text(out, it->name, strlen(it->name), name_w, true);
+                if (a->comp_detail_w > 0 && avail > name_w) {
+                    int gap = 2;
+                    int detail_w;
+                    if (gap > avail - name_w)
+                        gap = avail - name_w;
+                    draw_spaces(out, gap);
+                    detail_w = avail - name_w - gap;
+                    sgr_fg(out, selected ? t->selection_fg : t->dim);
+                    draw_text(out, it->detail, strlen(it->detail), detail_w,
+                              true);
+                } else if (avail > name_w) {
+                    draw_spaces(out, avail - name_w);
+                }
+            } else {
+                draw_spaces(out, avail);
+            }
+            str_putc(out, ' ');
+            sgr_reset(out);
+            sgr_bg(out, t->panel_alt);
+            sgr_fg(out, t->border);
+            str_puts(out, "\xe2\x94\x82");
+        }
+        sgr_reset(out);
+    }
+}
+
+/* ------------------------------------------------------------------ */
 /* Help overlay                                                        */
 /* ------------------------------------------------------------------ */
 
@@ -2886,6 +2966,8 @@ void app_render(App *a)
         draw_content(a, &out);
         draw_hint(a, &out);
         draw_status(a, &out);
+        if (a->comp_active)
+            draw_completion(a, &out);
         if (a->project_picker_active && !a->dir_active &&
             !a->menu_active && !a->chooser_active &&
             a->prompt == PROMPT_NONE && !a->help &&
