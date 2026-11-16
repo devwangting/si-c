@@ -94,6 +94,7 @@ typedef struct {
     char *type;
     int line;
     int end_line;
+    bool is_array;
 } LocalVar;
 
 typedef struct {

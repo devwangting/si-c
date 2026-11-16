@@ -285,6 +285,7 @@ static void test_project(const char *root)
     check_variable(&p, "completion_origin", "struct Point");
     check_variable(&p, "completion_world", "Point");
     check_variable(&p, "completion_ptr", "Point");
+    check_variable(&p, "completion_points", "[3]");
     check_variable(&p, "completion_a", "int");
     check_variable(&p, "completion_b", "int");
     check_variable(&p, "completion_p", "struct Point");
@@ -293,6 +294,18 @@ static void test_project(const char *root)
     intlist_init(&ids);
     project_find_symbols(&p, "CompletionForward", &ids);
     check(ids.count == 0, "forward declaration is not a variable");
+    intlist_free(&ids);
+    intlist_init(&ids);
+    project_find_symbols(&p, "CompletionMode", &ids);
+    check(ids.count == 0, "opaque enum class is not a variable");
+    intlist_free(&ids);
+    intlist_init(&ids);
+    project_find_symbols(&p, "CompletionMode2", &ids);
+    check(ids.count == 0, "opaque enum class underlying type is not a variable");
+    intlist_free(&ids);
+    intlist_init(&ids);
+    project_find_symbols(&p, "shared_point", &ids);
+    check(ids.count == 2, "same-name static globals both indexed");
     intlist_free(&ids);
 
     {
@@ -317,7 +330,7 @@ static void test_project(const char *root)
         project_member_list_init(&members);
         check(project_aggregate_members(&p, "CompletionNode", &members),
               "CompletionNode members found");
-        check(members.count == 4, "CompletionNode has four members");
+        check(members.count == 5, "CompletionNode has five members");
         m = find_member(&members, "pos");
         check(m != NULL && strcmp(m->type, "Point") == 0,
               "CompletionNode.pos type");
@@ -327,6 +340,9 @@ static void test_project(const char *root)
         m = find_member(&members, "alpha");
         check(m != NULL && strcmp(m->type, "int") == 0,
               "CompletionNode.alpha type");
+        m = find_member(&members, "point_arr");
+        check(m != NULL && m->is_array && strcmp(m->type, "Point") == 0,
+              "CompletionNode.point_arr is an array");
         project_member_list_free(&members);
 
         project_member_list_init(&members);

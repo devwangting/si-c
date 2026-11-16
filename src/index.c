@@ -1031,12 +1031,31 @@ static void sig_append_range(Parser *ps, Str *sig, int start, int end)
     }
 }
 
+static int declarator_signature_end(Parser *ps, int name, int end)
+{
+    int q = name + 1;
+
+    while (q < end && tok_is(ps, q, '[')) {
+        int depth = 1;
+        q++;
+        while (q < end && depth > 0) {
+            if (tok_is(ps, q, '['))
+                depth++;
+            else if (tok_is(ps, q, ']'))
+                depth--;
+            q++;
+        }
+    }
+    return q - 1;
+}
+
 static void variable_segment(Parser *ps, int seg, int end,
                              int base_start, int base_end,
                              bool first_seg, bool aggregate_tail)
 {
     int limit = first_top_level_equal(ps, seg, end);
     int name;
+    int sig_end;
     Str sig;
 
     if (limit < 0)
@@ -1046,12 +1065,13 @@ static void variable_segment(Parser *ps, int seg, int end,
     name = last_ident_before(ps, seg, limit);
     if (name < 0)
         return;
+    sig_end = declarator_signature_end(ps, name, limit);
     if (first_seg && !aggregate_tail) {
         /* The first declarator keeps its original token range, including
          * pointer stars before the name. */
         if (name == seg)
             return;
-        add_symbol(ps, SYM_VARIABLE, name, base_start, name,
+        add_symbol(ps, SYM_VARIABLE, name, base_start, sig_end,
                    ps->t[name].line);
         return;
     }
@@ -1059,7 +1079,7 @@ static void variable_segment(Parser *ps, int seg, int end,
         return;
     str_init(&sig);
     sig_append_range(ps, &sig, base_start, base_end);
-    sig_append_range(ps, &sig, seg, name);
+    sig_append_range(ps, &sig, seg, sig_end);
     if (sig.len == 0)
         str_putc(&sig, '?');
     add_symbol_raw(ps, SYM_VARIABLE, name, sig.data, ps->t[name].line);
@@ -1230,13 +1250,22 @@ static void parse_variables(Parser *ps)
                     if (decl_start >= end)
                         continue;
                 } else {
+                    int first = start + 1;
                     int ident_count = 0;
-                    for (k = start + 1; k < end; k++) {
+                    bool opaque_enum = false;
+                    if (tok_text(ps, start, "enum") && first < end &&
+                        (tok_text(ps, first, "class") ||
+                         tok_text(ps, first, "struct")))
+                        first++;
+                    for (k = first; k < end; k++) {
                         if (tok_ident(ps, k))
                             ident_count++;
+                        if (tok_text(ps, start, "enum") &&
+                            tok_is(ps, k, ':'))
+                            opaque_enum = true;
                     }
-                    /* struct Foo; is a forward declaration, not a variable. */
-                    if (ident_count < 2)
+                    /* struct Foo; / enum class Foo; are declarations. */
+                    if (opaque_enum || ident_count < 2)
                         continue;
                 }
             }
@@ -1388,7 +1417,8 @@ void project_member_list_free(ProjectMemberList *l)
 }
 
 static void member_list_add(ProjectMemberList *l, const char *name,
-                            const char *type, const char *signature)
+                            const char *type, const char *signature,
+                            bool is_array)
 {
     size_t i;
     ProjectMember *m;
@@ -1407,6 +1437,7 @@ static void member_list_add(ProjectMemberList *l, const char *name,
     m->name = xstrdup(name);
     m->type = xstrdup(type ? type : "");
     m->signature = xstrdup(signature ? signature : name);
+    m->is_array = is_array;
 }
 
 static bool type_word_qualifier(const char *s, size_t n)
@@ -1627,17 +1658,51 @@ static int member_name_index(const char *src, const Tok *t, int start, int end)
     return i >= start ? i : -1;
 }
 
+static bool member_has_array(const char *src, const Tok *t, int name,
+                             int end)
+{
+    int i;
+    int paren = 0;
+    int brack = 0;
+    int brace = 0;
+
+    for (i = name + 1; i < end; i++) {
+        if (tok_is_punct(src, &t[i], '(')) {
+            paren++;
+        } else if (tok_is_punct(src, &t[i], ')') && paren > 0) {
+            paren--;
+        } else if (tok_is_punct(src, &t[i], '[')) {
+            if (paren == 0 && brace == 0)
+                return true;
+            brack++;
+        } else if (tok_is_punct(src, &t[i], ']') && brack > 0) {
+            brack--;
+        } else if (tok_is_punct(src, &t[i], '{')) {
+            brace++;
+        } else if (tok_is_punct(src, &t[i], '}') && brace > 0) {
+            brace--;
+        } else if (paren == 0 && brack == 0 && brace == 0 &&
+                   (tok_is_punct(src, &t[i], '=') ||
+                    tok_is_punct(src, &t[i], ':'))) {
+            break;
+        }
+    }
+    return false;
+}
+
 static void member_segment_add(const char *src, const Tok *t,
                                ProjectMemberList *out, int base_start,
                                int base_end, int seg, int end, bool first)
 {
     int name = member_name_index(src, t, seg, end);
+    bool is_array;
     char *type;
     char *signature;
     char *name_text;
 
     if (name < 0)
         return;
+    is_array = member_has_array(src, t, name, end);
     if (first) {
         type = tok_range_text(src, t, base_start, name - 1);
     } else {
@@ -1663,7 +1728,7 @@ static void member_segment_add(const char *src, const Tok *t,
     }
     signature = tok_range_text(src, t, seg, name);
     name_text = tok_range_text(src, t, name, name);
-    member_list_add(out, name_text, type, signature);
+    member_list_add(out, name_text, type, signature, is_array);
     free(name_text);
     free(type);
     free(signature);
@@ -1738,7 +1803,7 @@ static void process_member_statement(const char *src, const Tok *t, int n,
                     char *name_text = tok_range_text(src, t, name, name);
                     char *signature =
                         tok_range_text(src, t, seg, name);
-                    member_list_add(out, name_text, "", signature);
+                    member_list_add(out, name_text, "", signature, false);
                     free(signature);
                     free(name_text);
                 }
@@ -1759,7 +1824,7 @@ static void process_member_statement(const char *src, const Tok *t, int n,
             tok_is_ident(&t[lparen + 2])) {
             char *name_text = tok_range_text(src, t, lparen + 2, lparen + 2);
             char *signature = tok_range_text(src, t, start, end - 1);
-            member_list_add(out, name_text, "", signature);
+            member_list_add(out, name_text, "", signature, false);
             free(signature);
             free(name_text);
         }

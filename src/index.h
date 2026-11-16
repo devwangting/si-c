@@ -53,6 +53,7 @@ typedef struct {
     char *name;
     char *type;
     char *signature;
+    bool is_array;
 } ProjectMember;
 
 typedef struct {

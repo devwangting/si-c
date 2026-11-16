@@ -33,3 +33,5 @@ int use_util_usage(void)
 }
 
 int global_counter = 9;
+
+static UtilBox shared_point;

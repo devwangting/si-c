@@ -9,4 +9,8 @@ int top(int x);
 int caller(int x);
 extern int util_global;
 
+typedef struct UtilBox {
+    int w;
+} UtilBox;
+
 #endif

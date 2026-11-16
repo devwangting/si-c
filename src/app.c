@@ -1801,6 +1801,7 @@ void app_rebuild_locals(App *a)
                 char type[256];
                 size_t wi;
                 bool duplicate = false;
+                bool is_array = false;
                 if (in_comment) {
                     if (p + 1 < e && b->data[p] == '*' &&
                         b->data[p + 1] == '/') {
@@ -1855,6 +1856,8 @@ void app_rebuild_locals(App *a)
                     next++;
                 if (next < e && b->data[next] == '(')
                     continue;
+                if (next < e && b->data[next] == '[')
+                    is_array = true;
                 if (!type_prefix(b->data + s, e - s, word_start - s, type,
                                  sizeof(type)))
                     continue;
@@ -1882,6 +1885,7 @@ void app_rebuild_locals(App *a)
                 a->locals[a->nlocals].type = xstrdup(type);
                 a->locals[a->nlocals].line = (int)ln + 1;
                 a->locals[a->nlocals].end_line = fn_end;
+                a->locals[a->nlocals].is_array = is_array;
                 a->nlocals++;
             }
             }
@@ -2028,6 +2032,44 @@ static void completion_suppress_current(App *a, int word_start,
              word ? word : "");
 }
 
+static void completion_suppress_at_cursor(App *a)
+{
+    Buffer *b = app_buffer(a);
+    int start;
+    int end;
+    int line;
+    int line_start;
+    int p;
+    size_t n;
+    char word[256];
+    bool member = false;
+
+    if (!b)
+        return;
+    line = buf_line_of_offset(b, (size_t)b->cursor) + 1;
+    line_start = (int)buf_line_start(b, line - 1);
+    completion_word_bounds(b, b->cursor, &start, &end);
+    (void)end;
+    n = (size_t)(b->cursor - start);
+    if (n >= sizeof(word))
+        n = sizeof(word) - 1;
+    memcpy(word, b->data + start, n);
+    word[n] = '\0';
+    p = start;
+    while (p > line_start &&
+           (b->data[p - 1] == ' ' || b->data[p - 1] == '\t'))
+        p--;
+    if (b->cursor == start) {
+        if (p > line_start && b->data[p - 1] == '.')
+            member = true;
+        else if (p >= line_start + 2 && b->data[p - 1] == '>' &&
+                 b->data[p - 2] == '-')
+            member = true;
+    }
+    a->comp_line = line;
+    completion_suppress_current(a, start, word, member);
+}
+
 bool app_completion_suppresses_word(App *a, const char *word)
 {
     size_t n;
@@ -2110,6 +2152,31 @@ void app_completion_move(App *a, int delta)
     app_completion_fix(a);
 }
 
+static bool line_is_preproc_continuation(Buffer *b, int line)
+{
+    int ln = line - 1;
+
+    while (ln >= 0) {
+        size_t start = buf_line_start(b, ln);
+        size_t end = buf_line_content_end(b, ln);
+        size_t p = start;
+        while (end > start &&
+               (b->data[end - 1] == ' ' || b->data[end - 1] == '\t' ||
+                b->data[end - 1] == '\r'))
+            end--;
+        if (end == start)
+            return false;
+        if (b->data[end - 1] != '\\')
+            return false;
+        while (p < end && (b->data[p] == ' ' || b->data[p] == '\t'))
+            p++;
+        if (p < end && b->data[p] == '#')
+            return true;
+        ln--;
+    }
+    return false;
+}
+
 static bool completion_context(App *a, CompletionContext *ctx)
 {
     Buffer *b;
@@ -2147,6 +2214,8 @@ static bool completion_context(App *a, CompletionContext *ctx)
             spans[i].kind == HL_PREPROC)
             return false;
     }
+    if (line_is_preproc_continuation(b, line))
+        return false;
     completion_word_bounds(b, pos, &start, &end);
     if (end > line_end)
         end = line_end;
@@ -2398,6 +2467,13 @@ static bool completion_symbol_type(Symbol *s, char *out, size_t out_size)
     }
     if (!last)
         return false;
+    {
+        const char *after = last + nlen;
+        while (*after == ' ' || *after == '\t')
+            after++;
+        if (*after == '[')
+            return false;
+    }
     n = (size_t)(last - sig);
     while (n > 0 && (sig[n - 1] == ' ' || sig[n - 1] == '\t'))
         n--;
@@ -2448,6 +2524,8 @@ static bool completion_global_type(App *a, const char *name, size_t len,
 {
     size_t lo;
     size_t i;
+    int fi = app_active_file_index(a);
+    Symbol *fallback = NULL;
 
     if (!a->sym_name_index || a->sym_name_count == 0)
         return false;
@@ -2460,8 +2538,13 @@ static bool completion_global_type(App *a, const char *name, size_t len,
             continue;
         if (s->kind != SYM_VARIABLE)
             continue;
-        return completion_symbol_type(s, out, out_size);
+        if (s->file_index == fi)
+            return completion_symbol_type(s, out, out_size);
+        if (!fallback && !strstr(s->signature, "static"))
+            fallback = s;
     }
+    if (fallback)
+        return completion_symbol_type(fallback, out, out_size);
     return false;
 }
 
@@ -2531,6 +2614,8 @@ static bool completion_member_type(App *a, const CompletionContext *ctx,
         if (i == n - 1) {
             LocalVar *lv = find_local_var(a, ctx->line, name, len);
             if (lv) {
+                if (lv->is_array)
+                    return false;
                 snprintf(out, out_size, "%s", lv->type);
             } else if (!completion_global_type(a, name, len, out,
                                                out_size)) {
@@ -2550,7 +2635,7 @@ static bool completion_member_type(App *a, const CompletionContext *ctx,
                     break;
                 }
             }
-            if (!m || !m->type[0])
+            if (!m || !m->type[0] || m->is_array)
                 return false;
             snprintf(out, out_size, "%s", m->type);
         }
@@ -2742,11 +2827,14 @@ bool app_completion_handle_mouse(App *a, KeyEvent *ev)
         return false;
     mx = ev->mouse_x;
     my = ev->mouse_y;
+    if (ev->mouse_button & 32)
+        return false; /* SGR motion: let the normal hover path run */
     if (ev->mouse_button == 64 || ev->mouse_button == 65) {
         if (mx > x && mx < x + w - 1 && my > y && my < y + h - 1) {
             app_completion_move(a, ev->mouse_button == 64 ? -3 : 3);
             return true;
         }
+        app_completion_close(a);
         return false;
     }
     if (ev->mouse_release)
@@ -3855,6 +3943,8 @@ static void app_reload_project(App *a)
 
 static void app_switch_buffer(App *a, int delta)
 {
+    app_completion_close(a);
+    completion_suppression_clear(a);
     int i;
     int next;
     if (a->nbuf <= 1) {
@@ -5592,6 +5682,7 @@ static void app_handle_editor_key(App *a, KeyEvent *ev)
         action_find_refs(a);
         break;
     case KEY_ESC:
+        completion_suppress_at_cursor(a);
         a->focus = FOCUS_EDITOR;
         break;
     default:
@@ -6572,6 +6663,8 @@ static void app_handle_key(App *a, KeyEvent *ev)
         return;
     }
     if (ev->code == KEY_ESC) {
+        if (a->focus == FOCUS_EDITOR)
+            completion_suppress_at_cursor(a);
         a->focus = FOCUS_EDITOR;
         return;
     }

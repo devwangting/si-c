@@ -47,6 +47,7 @@ typedef struct CompletionNode {
     Point pos;
     struct CompletionNode *next;
     int alpha, beta;
+    Point point_arr[2];
 } CompletionNode;
 
 typedef struct {
@@ -58,6 +59,8 @@ struct CompletionForward;
 struct Point completion_origin;
 Point completion_world = {1, 2};
 struct Point *completion_ptr;
+struct Point completion_points[3];
+static struct Point shared_point;
 int completion_a, completion_b;
 struct Point completion_p, *completion_q;
 int completion_arr[4];
@@ -66,9 +69,15 @@ int completion_demo(void)
 {
     int result = 0, other;
     Point local_p, *local_q;
+    Point local_arr[2];
     CompletionNode node;
+#define COMPLETION_LOCAL_MACRO(x) \
+    x + result
     node.pos.x = result + other + local_p.x + local_q->x;
     return node.pos.y + completion_origin.x + completion_world.y +
            completion_ptr->x;
 }
+
+enum class CompletionMode;
+enum class CompletionMode2 : unsigned;
 

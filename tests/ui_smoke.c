@@ -650,6 +650,43 @@ int main(int argc, char **argv)
             orig_scroll_col = b->scroll_col;
 
             move_after_anchor(&a, anchor);
+            key(&a, KEY_ESC, NULL);
+            check(a.comp_suppress, "Esc arms suppression without popup");
+            type_text(&a, "r");
+            check(!a.comp_active, "Esc suppresses next word");
+            type_text(&a, "e");
+            check(!a.comp_active, "Esc keeps suppressing the word");
+            type_text(&a, " ");
+            type_text(&a, "re");
+            check(a.comp_active, "space clears Esc suppression");
+            key(&a, KEY_ESC, NULL);
+
+            {
+                BufMatch pm;
+                check(buf_find(b, "x + result", 0, true, false, &pm),
+                      "find preprocessor continuation");
+                b->cursor = (int)(pm.pos + strlen("x + result"));
+                b->goal_col = buf_visual_col(b, (size_t)b->cursor);
+                app_update_info(&a);
+                type_text(&a, " re");
+                check(!a.comp_active,
+                      "preprocessor continuation suppresses completion");
+            }
+
+            move_after_anchor(&a, anchor);
+            type_text(&a, "node.point_arr.");
+            check(!a.comp_active, "array member has no chain completion");
+
+            move_after_anchor(&a, anchor);
+            type_text(&a, "local_arr.");
+            check(!a.comp_active, "local array has no member completion");
+
+            move_after_anchor(&a, anchor);
+            type_text(&a, "completion_points.");
+            check(!a.comp_active,
+                  "global array has no member completion");
+
+            move_after_anchor(&a, anchor);
             type_text(&a, "res");
             check(a.comp_active, "completion opens for res");
             check(a.comp_count >= 1, "completion has candidates");
@@ -807,18 +844,20 @@ int main(int argc, char **argv)
             key(&a, KEY_ESC, NULL);
 
             move_after_anchor(&a, anchor);
-            type_text(&a, "node.p");
+            type_text(&a, "node.al");
             check(a.comp_active && a.comp_count == 1 &&
-                  strcmp(a.comp_items[0].name, "pos") == 0,
+                  strcmp(a.comp_items[0].name, "alpha") == 0,
                   "member prefix filters");
 
             move_after_anchor(&a, anchor);
             type_text(&a, "node.");
-            check(a.comp_active && a.comp_member && a.comp_count == 4 &&
+            check(a.comp_active && a.comp_member && a.comp_count == 5 &&
                   completion_has(&a, "pos") &&
                   completion_has(&a, "next") &&
                   completion_has(&a, "alpha") &&
-                  completion_has(&a, "beta"), "node has four members");
+                  completion_has(&a, "beta") &&
+                  completion_has(&a, "point_arr"),
+                  "node has five members");
             key(&a, KEY_ESC, NULL);
 
             move_after_anchor(&a, anchor);
@@ -917,6 +956,14 @@ int main(int argc, char **argv)
                 app_layout(&a);
                 app_render(&a);
             }
+            app_handle_mouse_event(&a, a.comp_popup_x + 2,
+                                   a.comp_popup_y + 1, 35, false);
+            check(a.comp_active, "mouse motion keeps completion popup");
+            app_handle_mouse_event(&a, 0, 1, 65, false);
+            check(!a.comp_active, "wheel outside closes completion popup");
+            move_after_anchor(&a, anchor);
+            type_text(&a, "co");
+            app_render(&a);
             {
                 int mx = a.comp_popup_x + 2;
                 int my = a.comp_popup_y + 1;
@@ -952,6 +999,45 @@ int main(int argc, char **argv)
             app_render(&a);
             app_handle_mouse_event(&a, 0, 1, 0, false);
             check(!a.comp_active, "outside click closes popup");
+
+            {
+                int ufi = project_find_file_by_rel(&a.project, "util.c");
+                check(ufi >= 0, "find util.c for static test");
+                if (ufi >= 0) {
+                    Buffer *ub;
+                    char *uorig;
+                    size_t ulen;
+                    int ucur;
+                    int usl;
+                    int usc;
+                    app_open_file_index(&a, ufi, 1, 0, false);
+                    ub = app_buffer(&a);
+                    uorig = xstrndup(ub->data, ub->len);
+                    ulen = ub->len;
+                    ucur = ub->cursor;
+                    usl = ub->scroll_line;
+                    usc = ub->scroll_col;
+                    move_after_anchor(&a, "static UtilBox shared_point;");
+                    type_text(&a, "shared_point.");
+                    check(a.comp_active && a.comp_count == 1 &&
+                          strcmp(a.comp_items[0].name, "w") == 0,
+                          "current-file static global wins type lookup");
+                    key(&a, KEY_ESC, NULL);
+                    app_completion_reset(&a);
+                    buf_delete_range(ub, 0, ub->len);
+                    buf_insert_at(ub, 0, uorig, ulen);
+                    ub->cursor = ucur;
+                    ub->goal_col = buf_visual_col(ub, (size_t)ub->cursor);
+                    ub->scroll_line = usl;
+                    ub->scroll_col = usc;
+                    ub->saved_state = ub->state_id;
+                    free(uorig);
+                    a.locals_buf = -1;
+                    app_update_info(&a);
+                    app_open_file_index(&a, cfi, 1, 0, false);
+                    b = app_buffer(&a);
+                }
+            }
 
             app_completion_reset(&a);
             buf_delete_range(b, 0, b->len);

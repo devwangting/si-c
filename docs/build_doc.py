@@ -1316,16 +1316,16 @@ parts.append("""
 <tr><td>app.c:842</td><td>insert_at_cursor</td><td>插入字符并移动光标</td></tr>
 <tr><td>app.c:916</td><td>move_vertical</td><td>上下移动，保持 goal_col</td></tr>
 <tr><td>app.c:1761</td><td>app_rebuild_locals</td><td>扫描函数体，建立局部变量表</td></tr>
-<tr><td>app.c:2561</td><td>app_completion_update</td><td>收集并过滤补全候选</td></tr>
-<tr><td>app.c:2637</td><td>app_completion_accept</td><td>替换当前标识符并关闭列表</td></tr>
-<tr><td>app.c:2728</td><td>app_completion_handle_mouse</td><td>补全列表的鼠标命中/双击/滚轮</td></tr>
-<tr><td>app.c:3007</td><td>app_update_info</td><td>更新 CODE 面板的符号/定义/代码范围</td></tr>
-<tr><td>app.c:3700</td><td>app_show_context</td><td>构建调用链或同名函数选择</td></tr>
-<tr><td>app.c:4354</td><td>app_change_project</td><td>切换项目，关闭旧 Buffer，重新索引</td></tr>
-<tr><td>app.c:5453</td><td>app_handle_editor_key</td><td>编辑器的按键命令</td></tr>
-<tr><td>app.c:5811</td><td>editor_offset_at</td><td>鼠标坐标 → Buffer 字节偏移</td></tr>
-<tr><td>app.c:6338</td><td>app_handle_key</td><td>事件优先级分发</td></tr>
-<tr><td>app.c:6813</td><td>ui_run</td><td>初始化、主循环、清理</td></tr>
+<tr><td>app.c:2646</td><td>app_completion_update</td><td>收集并过滤补全候选</td></tr>
+<tr><td>app.c:2722</td><td>app_completion_accept</td><td>替换当前标识符并关闭列表</td></tr>
+<tr><td>app.c:2813</td><td>app_completion_handle_mouse</td><td>补全列表的鼠标命中/双击/滚轮</td></tr>
+<tr><td>app.c:3095</td><td>app_update_info</td><td>更新 CODE 面板的符号/定义/代码范围</td></tr>
+<tr><td>app.c:3788</td><td>app_show_context</td><td>构建调用链或同名函数选择</td></tr>
+<tr><td>app.c:4444</td><td>app_change_project</td><td>切换项目，关闭旧 Buffer，重新索引</td></tr>
+<tr><td>app.c:5543</td><td>app_handle_editor_key</td><td>编辑器的按键命令</td></tr>
+<tr><td>app.c:5902</td><td>editor_offset_at</td><td>鼠标坐标 → Buffer 字节偏移</td></tr>
+<tr><td>app.c:6429</td><td>app_handle_key</td><td>事件优先级分发</td></tr>
+<tr><td>app.c:6906</td><td>ui_run</td><td>初始化、主循环、清理</td></tr>
 <tr><td>text.c:98</td><td>buf_ensure_lines</td><td>重建行起始偏移表</td></tr>
 <tr><td>text.c:170</td><td>buf_line_of_offset</td><td>字节偏移 → 行号（二分）</td></tr>
 <tr><td>text.c:188</td><td>buf_visual_col</td><td>字节偏移 → 显示列</td></tr>
@@ -1342,11 +1342,11 @@ parts.append("""
 <tr><td>render.c:2947</td><td>app_render</td><td>整帧 ANSI 生成和输出</td></tr>
 <tr><td>index.c:193</td><td>lex_source</td><td>C 词法切分</td></tr>
 <tr><td>index.c:828</td><td>parse_functions</td><td>函数定义/原型识别</td></tr>
-<tr><td>index.c:1327</td><td>parse_source</td><td>单文件解析入口</td></tr>
-<tr><td>index.c:2233</td><td>project_load</td><td>扫描项目、建立符号索引</td></tr>
-<tr><td>index.c:2999</td><td>build_call_graph</td><td>真实调用关系图</td></tr>
-<tr><td>index.c:3209</td><td>project_caller_tree</td><td>反向调用者树</td></tr>
-<tr><td>index.c:3260</td><td>project_context</td><td>调用者/被调用者/引用数</td></tr>
+<tr><td>index.c:1356</td><td>parse_source</td><td>单文件解析入口</td></tr>
+<tr><td>index.c:2298</td><td>project_load</td><td>扫描项目、建立符号索引</td></tr>
+<tr><td>index.c:3064</td><td>build_call_graph</td><td>真实调用关系图</td></tr>
+<tr><td>index.c:3274</td><td>project_caller_tree</td><td>反向调用者树</td></tr>
+<tr><td>index.c:3325</td><td>project_context</td><td>调用者/被调用者/引用数</td></tr>
 </table>
 </section>
 """)

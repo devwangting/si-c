@@ -621,21 +621,35 @@ typedef struct CompletionNode {
     Point pos;
     struct CompletionNode *next;
     int alpha, beta;
+    Point point_arr[2];
 } CompletionNode;
 
 struct Point completion_origin;
 Point completion_world = {1, 2};
 struct Point *completion_ptr;
+struct Point completion_points[3];
+static struct Point shared_point;
 
 int completion_demo(void)
 {
     int result = 0, other;
+    Point local_p, *local_q;
+    Point local_arr[2];
     CompletionNode node;
-    node.pos.x = result + other;
+#define COMPLETION_LOCAL_MACRO(x) \
+    x + result
+    node.pos.x = result + other + local_p.x + local_q->x;
     return node.pos.y + completion_origin.x + completion_world.y +
            completion_ptr->x;
 }
+
+enum class CompletionMode;
+enum class CompletionMode2 : unsigned;
 ```
+
+另外在 `util.h` 增加 `typedef struct UtilBox { int w; } UtilBox;`，
+在 `util.c` 末尾增加 `static UtilBox shared_point;`，用于验证当前文件
+优先的同名静态变量类型解析。
 
 测试用例：
 
@@ -651,16 +665,23 @@ int completion_demo(void)
 - demo 局部结构体：在 `tests/fixtures/demo/main.c` 的 `main()` 里新起
   一行输入 `p.`，出现 `Point` 的 `x`、`y`；选择 `y` 后缓冲区为 `p.y`。
   这是用户实际试过的场景，必须覆盖。
-- 成员补全：输入 `node.` 出现 `pos`、`next`、`alpha`、`beta`；
-  选择 `pos` 后输入 `.` 出现 `x`、`y`。
+- 成员补全：输入 `node.` 出现 `pos`、`next`、`alpha`、`beta`、
+  `point_arr`；选择 `pos` 后输入 `.` 出现 `x`、`y`。
 - 链式补全：输入 `node.pos.` 出现 `x`、`y`；输入 `node.next->pos.`
   同样出现 `x`、`y`。
+- 数组接收者：`completion_points.`、`local_arr.`、`node.point_arr.`
+  都不弹成员列表。
 - Esc 抑制：输入 `re` 后 Esc，再输入 `s`，列表不活动；输入空格后
-  重新输入 `re`，列表恢复。
-- 注释/字符串不触发：在 `// re` 和 `"re"` 中不活动。
+  重新输入 `re`，列表恢复。没有弹出框时按 Esc 也抑制下一个词。
+- 注释/字符串/预处理续行不触发：在 `// re`、`"re"` 和宏反斜杠续行中
+  不活动。
 - 大小写：`po` 不匹配 `Point`。
-- 鼠标：弹出框活动时单击某行只改变选中项；再次单击同一行接受；
-  滚轮滚动后选中项仍在可视区。
+- 同名静态变量：在 `util.c` 输入 `shared_point.` 只出现 `UtilBox` 的
+  `w`，不会串到 `main.c` 的 `Point`。
+- opaque enum：`enum class CompletionMode;` 和
+  `enum class CompletionMode2 : unsigned;` 不产生变量符号。
+- 鼠标：SGR 移动事件（button 35）不关闭浮层；浮层内单击只改变选中项，
+  再次单击接受；滚轮滚动选中项；浮层外滚轮关闭浮层。
 - 渲染：`app_render()` 后几何信息有效，弹出框不覆盖状态行/提示行。
 
 ### 10.3 回归
@@ -701,8 +722,9 @@ int completion_demo(void)
 - 输入 `completion_origin.`、`completion_world.`、`completion_ptr->`
   都能看到 `x`、`y`。
 - 在 `tests/fixtures/demo` 中，输入 `re` 能看到 `result`、`return`。
-- 输入 `node.` 能看到 `pos`、`next`、`alpha`、`beta`，输入 `node.pos.`
-  能看到 `x`、`y`。
+- 输入 `node.` 能看到 `pos`、`next`、`alpha`、`beta`、`point_arr`，
+  输入 `node.pos.` 能看到 `x`、`y`；输入数组接收者 `local_arr.` 或
+  `completion_points.` 不弹列表。
 - 只有一个候选时列表不自动补全，Tab/Enter 后才插入。
 - Esc 后继续输入同一个词不再弹；换词后恢复。
 - 注释、字符串、提示框、菜单里不弹。
