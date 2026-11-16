@@ -1897,6 +1897,7 @@ static void completion_word_bounds(Buffer *b, int pos, int *start, int *end)
 static void completion_suppression_clear(App *a)
 {
     a->comp_suppress = false;
+    a->comp_suppress_first = 0;
     a->comp_suppress_word[0] = '\0';
     a->comp_suppress_member = false;
 }
@@ -1929,6 +1930,12 @@ static bool completion_suppression_valid(App *a)
         completion_suppression_clear(a);
         return false;
     }
+    if (a->comp_suppress_first != 0 &&
+        ((size_t)start >= b->len ||
+         (unsigned char)b->data[start] != a->comp_suppress_first)) {
+        completion_suppression_clear(a);
+        return false;
+    }
     n = (size_t)(b->cursor - start);
     if (n >= sizeof(word))
         n = sizeof(word) - 1;
@@ -1954,6 +1961,8 @@ static void completion_suppress_current(App *a, int word_start,
     a->comp_suppress_buf = a->active;
     a->comp_suppress_line = a->comp_line;
     a->comp_suppress_start = word_start;
+    a->comp_suppress_first =
+        word && *word ? (unsigned char)word[0] : 0;
     a->comp_suppress_member = member;
     snprintf(a->comp_suppress_word, sizeof(a->comp_suppress_word), "%s",
              word ? word : "");
@@ -2392,6 +2401,26 @@ bool app_completion_handle_key(App *a, KeyEvent *ev)
                                     a->comp_member);
         app_completion_close(a);
         return true;
+    case KEY_UP:
+        app_completion_move(a, -1);
+        return true;
+    case KEY_DOWN:
+        app_completion_move(a, 1);
+        return true;
+    case KEY_PGUP:
+        app_completion_move(a, -SI_MAX(1, a->comp_popup_rows));
+        return true;
+    case KEY_PGDN:
+        app_completion_move(a, SI_MAX(1, a->comp_popup_rows));
+        return true;
+    case KEY_HOME:
+        a->comp_sel = 0;
+        app_completion_fix(a);
+        return true;
+    case KEY_END:
+        a->comp_sel = a->comp_count ? (int)a->comp_count - 1 : 0;
+        app_completion_fix(a);
+        return true;
     case KEY_CHAR:
     case KEY_BACKSPACE:
     case KEY_DELETE:
@@ -2678,10 +2707,14 @@ void app_update_info(App *a)
         intlist_init(&choice);
         best = app_pick_symbol(a, word, member_access, &choice);
         if (choice.count > 1) {
-            app_chooser_open(a, &choice, word);
-            intlist_free(&choice);
-            free(word);
-            return;
+            if (app_completion_suppresses_word(a, word)) {
+                best = choice.items[0];
+            } else {
+                app_chooser_open(a, &choice, word);
+                intlist_free(&choice);
+                free(word);
+                return;
+            }
         }
         intlist_free(&choice);
     }
@@ -3291,10 +3324,14 @@ void app_show_context(App *a)
     intlist_init(&choice);
     best = app_pick_symbol(a, word, member_access, &choice);
     if (choice.count > 1) {
-        app_chooser_open(a, &choice, word);
-        intlist_free(&choice);
-        free(word);
-        return;
+        if (app_completion_suppresses_word(a, word)) {
+            best = choice.items[0];
+        } else {
+            app_chooser_open(a, &choice, word);
+            intlist_free(&choice);
+            free(word);
+            return;
+        }
     }
     intlist_free(&choice);
     if (best < 0) {

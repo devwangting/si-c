@@ -78,6 +78,7 @@ static void move_after_anchor(App *a, const char *anchor)
     b->cursor++;
     b->goal_col = 0;
     app_update_info(a);
+    app_completion_reset(a);
 }
 
 int main(int argc, char **argv)
@@ -635,8 +636,18 @@ int main(int argc, char **argv)
         if (cfi >= 0) {
             const char *anchor =
                 "node.pos.x = result + other + local_p.x + local_q->x;";
+            char *orig;
+            size_t orig_len;
+            int orig_cursor;
+            int orig_scroll_line;
+            int orig_scroll_col;
             app_open_file_index(&a, cfi, 1, 0, false);
             b = app_buffer(&a);
+            orig = xstrndup(b->data, b->len);
+            orig_len = b->len;
+            orig_cursor = b->cursor;
+            orig_scroll_line = b->scroll_line;
+            orig_scroll_col = b->scroll_col;
 
             move_after_anchor(&a, anchor);
             type_text(&a, "res");
@@ -725,6 +736,87 @@ int main(int argc, char **argv)
                       "mid-word accept has no duplicate suffix");
                 app_update_info(&a);
             }
+
+            move_after_anchor(&a, anchor);
+            type_text(&a, "co");
+            check(a.comp_active && a.comp_count >= 2, "co has candidates");
+            {
+                int cur = b->cursor;
+                char chosen[256];
+                key(&a, KEY_DOWN, NULL);
+                check(a.comp_sel == 1, "down moves completion selection");
+                check(b->cursor == cur, "down does not move editor cursor");
+                snprintf(chosen, sizeof(chosen), "%s",
+                         a.comp_items[1].name);
+                key(&a, KEY_TAB, NULL);
+                check(!a.comp_active, "tab accepts selected item");
+                check(b->cursor >= (int)strlen(chosen) &&
+                      memcmp(b->data + b->cursor - strlen(chosen), chosen,
+                             strlen(chosen)) == 0,
+                      "selected item inserted");
+            }
+
+            move_after_anchor(&a, anchor);
+            type_text(&a, "co");
+            key(&a, KEY_END, NULL);
+            check(a.comp_sel == (int)a.comp_count - 1, "End selects last");
+            key(&a, KEY_HOME, NULL);
+            check(a.comp_sel == 0, "Home selects first");
+            key(&a, KEY_PGDN, NULL);
+            check(a.comp_sel > 0, "PgDn moves selection");
+            key(&a, KEY_ESC, NULL);
+            check(!a.comp_active, "Esc closes after navigation");
+
+            move_after_anchor(&a, "util_global++; return add(p.x, p.y);");
+            type_text(&a, "Point");
+            check(!a.comp_active, "full Point hides list");
+            check(a.comp_suppress, "Point suppression armed");
+            check(!a.chooser_active, "auto chooser defers to completion");
+            key(&a, KEY_F12, NULL);
+            check(a.chooser_active ||
+                  (a.focus == FOCUS_CONTEXT && a.view.count >= 2),
+                  "F12 still resolves definitions");
+            if (a.chooser_active)
+                key(&a, KEY_ESC, NULL);
+            else
+                key(&a, KEY_F4, NULL);
+            check(!a.comp_active, "F12 does not leave completion open");
+
+            move_after_anchor(&a, "util_global++; return add(p.x, p.y);");
+            type_text(&a, "Poin");
+            check(a.comp_active, "Poin completion active");
+            key(&a, KEY_TAB, NULL);
+            check(!a.comp_active, "tab accepts Poin");
+            check(!a.chooser_active, "accepted duplicate stays non-modal");
+
+            move_after_anchor(&a, anchor);
+            type_text(&a, "re");
+            check(a.comp_active, "completion before Ctrl+F");
+            a.last_find[0] = '\0';
+            key(&a, 6, NULL); /* Ctrl+F */
+            check(!a.comp_active && a.prompt == PROMPT_FIND,
+                  "Ctrl+F closes completion and opens find");
+            key(&a, KEY_ESC, NULL);
+
+            move_after_anchor(&a, anchor);
+            type_text(&a, "re");
+            check(a.comp_active, "completion before Alt+M");
+            key(&a, KEY_ALT_CHAR, "m");
+            check(!a.comp_active && a.menu_active,
+                  "Alt+M closes completion and opens menu");
+            key(&a, KEY_ESC, NULL);
+
+            app_completion_reset(&a);
+            buf_delete_range(b, 0, b->len);
+            buf_insert_at(b, 0, orig, orig_len);
+            b->cursor = orig_cursor;
+            b->goal_col = buf_visual_col(b, (size_t)b->cursor);
+            b->scroll_line = orig_scroll_line;
+            b->scroll_col = orig_scroll_col;
+            b->saved_state = b->state_id;
+            free(orig);
+            a.locals_buf = -1;
+            app_update_info(&a);
         }
     }
 

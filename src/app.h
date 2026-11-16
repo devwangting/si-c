@@ -201,6 +201,7 @@ typedef struct {
     int comp_suppress_buf;
     int comp_suppress_line;
     int comp_suppress_start;
+    unsigned char comp_suppress_first;
     char comp_suppress_word[256];
     bool comp_suppress_member;
 
