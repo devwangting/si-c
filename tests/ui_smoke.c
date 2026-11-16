@@ -807,6 +807,88 @@ int main(int argc, char **argv)
             key(&a, KEY_ESC, NULL);
 
             move_after_anchor(&a, anchor);
+            type_text(&a, "node.p");
+            check(a.comp_active && a.comp_count == 1 &&
+                  strcmp(a.comp_items[0].name, "pos") == 0,
+                  "member prefix filters");
+
+            move_after_anchor(&a, anchor);
+            type_text(&a, "node.");
+            check(a.comp_active && a.comp_member && a.comp_count == 4 &&
+                  completion_has(&a, "pos") &&
+                  completion_has(&a, "next") &&
+                  completion_has(&a, "alpha") &&
+                  completion_has(&a, "beta"), "node has four members");
+            key(&a, KEY_ESC, NULL);
+
+            move_after_anchor(&a, anchor);
+            type_text(&a, "node.pos.");
+            check(a.comp_active && a.comp_member && a.comp_count == 2 &&
+                  completion_has(&a, "x") && completion_has(&a, "y"),
+                  "chained value member list");
+            key(&a, KEY_ESC, NULL);
+
+            move_after_anchor(&a, anchor);
+            type_text(&a, "node.next->pos.");
+            check(a.comp_active && a.comp_member && a.comp_count == 2 &&
+                  completion_has(&a, "x") && completion_has(&a, "y"),
+                  "chained pointer member list");
+            key(&a, KEY_ESC, NULL);
+
+            move_after_anchor(&a, anchor);
+            type_text(&a, "local_q->");
+            check(a.comp_active && a.comp_member && a.comp_count == 2 &&
+                  completion_has(&a, "x") && completion_has(&a, "y"),
+                  "local pointer member list");
+            key(&a, KEY_ESC, NULL);
+
+            move_after_anchor(&a, anchor);
+            type_text(&a, "unknown_value.");
+            check(!a.comp_active, "unknown receiver has no members");
+
+            move_after_anchor(&a, anchor);
+            type_text(&a, "completion_arr[0].");
+            check(!a.comp_active, "indexed expression has no members");
+
+            move_after_anchor(&a,
+                              "util_global++; return add(p.x, p.y);");
+            type_text(&a, "p.");
+            check(a.comp_active && a.comp_member, "p. opens member list");
+            check(a.comp_count == 2 && completion_has(&a, "x") &&
+                  completion_has(&a, "y"), "Point has x/y members");
+            key(&a, KEY_ESC, NULL);
+
+            move_after_anchor(&a,
+                              "util_global++; return add(p.x, p.y);");
+            type_text(&a, "p.");
+            check(a.comp_active, "p. reopens member list");
+            key(&a, KEY_DOWN, NULL);
+            key(&a, KEY_TAB, NULL);
+            check(b->cursor >= 1 && b->data[b->cursor - 1] == 'y',
+                  "member accept inserts y");
+
+            move_after_anchor(&a,
+                              "util_global++; return add(p.x, p.y);");
+            type_text(&a, "completion_origin.");
+            check(a.comp_active && a.comp_member && a.comp_count == 2,
+                  "global struct member list");
+            key(&a, KEY_ESC, NULL);
+
+            move_after_anchor(&a,
+                              "util_global++; return add(p.x, p.y);");
+            type_text(&a, "completion_world.");
+            check(a.comp_active && a.comp_member && a.comp_count == 2,
+                  "global typedef value member list");
+            key(&a, KEY_ESC, NULL);
+
+            move_after_anchor(&a,
+                              "util_global++; return add(p.x, p.y);");
+            type_text(&a, "completion_ptr->");
+            check(a.comp_active && a.comp_member && a.comp_count == 2,
+                  "global pointer member list");
+            key(&a, KEY_ESC, NULL);
+
+            move_after_anchor(&a, anchor);
             type_text(&a, "co");
             check(a.comp_active, "popup active for geometry");
             app_render(&a);

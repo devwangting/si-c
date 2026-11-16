@@ -107,6 +107,12 @@ typedef struct {
     unsigned char group;
 } CompleteItem;
 
+typedef struct {
+    char *key;
+    ProjectMemberList members;
+    bool found;
+} CompleteMemberCache;
+
 enum {
     COMPLETE_GROUP_LOCAL = 0,
     COMPLETE_GROUP_GLOBAL,
@@ -195,6 +201,9 @@ typedef struct {
     int comp_popup_rows;
     int comp_name_w;
     int comp_detail_w;
+    CompleteMemberCache *member_cache;
+    size_t member_cache_count;
+    size_t member_cache_cap;
     long comp_click_time;
     int comp_click_index;
     int comp_click_x;

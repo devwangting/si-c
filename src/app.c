@@ -1703,6 +1703,61 @@ static bool local_word_is_type(App *a, const char *word, size_t len)
     return strlist_contains_n(&a->types, word, len);
 }
 
+static int buffer_function_end(Buffer *b, int start_line)
+{
+    int line;
+    int depth = 0;
+    bool opened = false;
+    bool comment = false;
+    char quote = '\0';
+
+    for (line = start_line - 1; line < (int)buf_line_count(b); line++) {
+        size_t start = buf_line_start(b, line);
+        size_t end = buf_line_content_end(b, line);
+        size_t i;
+        for (i = start; i < end; i++) {
+            char c = b->data[i];
+            if (comment) {
+                if (c == '*' && i + 1 < end && b->data[i + 1] == '/') {
+                    comment = false;
+                    i++;
+                }
+                continue;
+            }
+            if (quote) {
+                if (c == '\\' && i + 1 < end) {
+                    i++;
+                    continue;
+                }
+                if (c == quote)
+                    quote = '\0';
+                continue;
+            }
+            if (c == '/' && i + 1 < end && b->data[i + 1] == '/')
+                break;
+            if (c == '/' && i + 1 < end && b->data[i + 1] == '*') {
+                comment = true;
+                i++;
+                continue;
+            }
+            if (c == '"' || c == '\'') {
+                quote = c;
+                continue;
+            }
+            if (c == '{') {
+                depth++;
+                opened = true;
+            } else if (c == '}') {
+                if (depth > 0)
+                    depth--;
+                if (opened && depth == 0)
+                    return line + 1;
+            }
+        }
+    }
+    return (int)buf_line_count(b);
+}
+
 void app_rebuild_locals(App *a)
 {
     Buffer *b = app_buffer(a);
@@ -1725,12 +1780,17 @@ void app_rebuild_locals(App *a)
 
     for (i = 0; i < a->project.files[fi].sym_count; i++) {
         Symbol *fn = &a->project.syms[a->project.files[fi].sym_start + i];
+        int fn_end;
         int ln;
         if (fn->kind != SYM_FUNCTION)
             continue;
+        fn_end = buffer_function_end(b, fn->line);
+        if (fn_end < fn->line)
+            fn_end = fn->end_line;
         {
             bool in_comment = false;
-            for (ln = fn->line - 1; ln < fn->end_line; ln++) {
+            for (ln = fn->line - 1;
+                 ln < fn_end && ln < (int)buf_line_count(b); ln++) {
             size_t s = buf_line_start(b, ln);
             size_t e = buf_line_content_end(b, ln);
             size_t p = s;
@@ -1821,7 +1881,7 @@ void app_rebuild_locals(App *a)
                     xstrndup(b->data + word_start, word_end - word_start);
                 a->locals[a->nlocals].type = xstrdup(type);
                 a->locals[a->nlocals].line = (int)ln + 1;
-                a->locals[a->nlocals].end_line = fn->end_line;
+                a->locals[a->nlocals].end_line = fn_end;
                 a->nlocals++;
             }
             }
@@ -2003,10 +2063,24 @@ void app_completion_close(App *a)
     a->comp_popup_first = 0;
 }
 
+static void completion_clear_member_cache(App *a)
+{
+    size_t i;
+    for (i = 0; i < a->member_cache_count; i++) {
+        free(a->member_cache[i].key);
+        project_member_list_free(&a->member_cache[i].members);
+    }
+    free(a->member_cache);
+    a->member_cache = NULL;
+    a->member_cache_count = 0;
+    a->member_cache_cap = 0;
+}
+
 void app_completion_reset(App *a)
 {
     app_completion_close(a);
     completion_suppression_clear(a);
+    completion_clear_member_cache(a);
 }
 
 void app_completion_fix(App *a)
@@ -2306,6 +2380,184 @@ static void completion_collect_types(App *a, const CompletionContext *ctx)
     }
 }
 
+static bool completion_symbol_type(Symbol *s, char *out, size_t out_size)
+{
+    const char *sig = s->signature;
+    size_t nlen = strlen(s->name);
+    const char *p = sig;
+    const char *last = NULL;
+    size_t n;
+
+    while ((p = strstr(p, s->name)) != NULL) {
+        bool left = p == sig ||
+                    !(isalnum((unsigned char)p[-1]) || p[-1] == '_');
+        bool right = !(isalnum((unsigned char)p[nlen]) || p[nlen] == '_');
+        if (left && right)
+            last = p;
+        p += nlen;
+    }
+    if (!last)
+        return false;
+    n = (size_t)(last - sig);
+    while (n > 0 && (sig[n - 1] == ' ' || sig[n - 1] == '\t'))
+        n--;
+    if (n == 0)
+        return false;
+    if (n >= out_size)
+        n = out_size - 1;
+    memcpy(out, sig, n);
+    out[n] = '\0';
+    return true;
+}
+
+static ProjectMemberList *completion_members(App *a, const char *type_text)
+{
+    char key[256];
+    size_t i;
+    CompleteMemberCache *c;
+
+    if (!project_type_aggregate_key(type_text, key, sizeof(key)))
+        return NULL;
+    for (i = 0; i < a->member_cache_count; i++) {
+        if (strcmp(a->member_cache[i].key, key) == 0)
+            return a->member_cache[i].found
+                       ? &a->member_cache[i].members
+                       : NULL;
+    }
+    if (a->member_cache_count == a->member_cache_cap) {
+        a->member_cache_cap = a->member_cache_cap
+                                  ? a->member_cache_cap * 2
+                                  : 16;
+        a->member_cache =
+            xrealloc(a->member_cache,
+                     a->member_cache_cap * sizeof(*a->member_cache));
+    }
+    c = &a->member_cache[a->member_cache_count++];
+    c->key = xstrdup(key);
+    project_member_list_init(&c->members);
+    c->found = project_aggregate_members(&a->project, key, &c->members);
+    if (!c->found) {
+        project_member_list_free(&c->members);
+        return NULL;
+    }
+    return &c->members;
+}
+
+static bool completion_global_type(App *a, const char *name, size_t len,
+                                   char *out, size_t out_size)
+{
+    size_t lo;
+    size_t i;
+
+    if (!a->sym_name_index || a->sym_name_count == 0)
+        return false;
+    lo = completion_lower_bound(a, name, len);
+    for (i = lo; i < a->sym_name_count; i++) {
+        Symbol *s = a->sym_name_index[i];
+        if (strncmp(s->name, name, len) != 0)
+            break;
+        if (strlen(s->name) != len)
+            continue;
+        if (s->kind != SYM_VARIABLE)
+            continue;
+        return completion_symbol_type(s, out, out_size);
+    }
+    return false;
+}
+
+static bool completion_member_type(App *a, const CompletionContext *ctx,
+                                   char *out, size_t out_size)
+{
+    Buffer *b = app_buffer(a);
+    struct {
+        int start;
+        int len;
+    } segs[16];
+    int n = 0;
+    int line_start;
+    int p;
+    int i;
+
+    if (!b)
+        return false;
+    line_start = (int)buf_line_start(b, ctx->line - 1);
+    p = ctx->word_start;
+    while (p > line_start &&
+           (b->data[p - 1] == ' ' || b->data[p - 1] == '\t'))
+        p--;
+    if (p > line_start && b->data[p - 1] == '.') {
+        p--;
+    } else if (p >= line_start + 2 && b->data[p - 1] == '>' &&
+               b->data[p - 2] == '-') {
+        p -= 2;
+    } else {
+        return false;
+    }
+    for (;;) {
+        int end;
+        while (p > line_start &&
+               (b->data[p - 1] == ' ' || b->data[p - 1] == '\t'))
+            p--;
+        if (p <= line_start || !completion_ident((unsigned char)b->data[p - 1]))
+            return false;
+        end = p;
+        while (p > line_start &&
+               completion_ident((unsigned char)b->data[p - 1]))
+            p--;
+        if (n >= (int)SI_ARRAY_LEN(segs))
+            return false;
+        segs[n].start = p;
+        segs[n].len = end - p;
+        n++;
+        while (p > line_start &&
+               (b->data[p - 1] == ' ' || b->data[p - 1] == '\t'))
+            p--;
+        if (p > line_start && b->data[p - 1] == '.') {
+            p--;
+            continue;
+        }
+        if (p >= line_start + 2 && b->data[p - 1] == '>' &&
+            b->data[p - 2] == '-') {
+            p -= 2;
+            continue;
+        }
+        break;
+    }
+    if (n == 0)
+        return false;
+    for (i = n - 1; i >= 0; i--) {
+        const char *name = b->data + segs[i].start;
+        size_t len = (size_t)segs[i].len;
+        if (i == n - 1) {
+            LocalVar *lv = find_local_var(a, ctx->line, name, len);
+            if (lv) {
+                snprintf(out, out_size, "%s", lv->type);
+            } else if (!completion_global_type(a, name, len, out,
+                                               out_size)) {
+                return false;
+            }
+        } else {
+            ProjectMemberList *members = completion_members(a, out);
+            ProjectMember *m = NULL;
+            size_t j;
+            if (!members)
+                return false;
+            for (j = 0; j < members->count; j++) {
+                ProjectMember *cand = &members->items[j];
+                if (strlen(cand->name) == len &&
+                    memcmp(cand->name, name, len) == 0) {
+                    m = cand;
+                    break;
+                }
+            }
+            if (!m || !m->type[0])
+                return false;
+            snprintf(out, out_size, "%s", m->type);
+        }
+    }
+    return out[0] != '\0';
+}
+
 void app_completion_update(App *a)
 {
     CompletionContext ctx;
@@ -2335,13 +2587,34 @@ void app_completion_update(App *a)
     snprintf(a->comp_prefix, sizeof(a->comp_prefix), "%s", ctx.prefix);
     a->comp_member = ctx.member;
     if (ctx.member) {
-        app_completion_close(a);
-        return;
+        char type[512];
+        ProjectMemberList *members;
+        size_t i;
+        if (!completion_member_type(a, &ctx, type, sizeof(type))) {
+            app_completion_close(a);
+            return;
+        }
+        members = completion_members(a, type);
+        if (!members) {
+            app_completion_close(a);
+            return;
+        }
+        for (i = 0; i < members->count; i++) {
+            ProjectMember *m = &members->items[i];
+            if (ctx.prefix_len > 0 &&
+                (strlen(m->name) < (size_t)ctx.prefix_len ||
+                 memcmp(m->name, ctx.prefix, (size_t)ctx.prefix_len) != 0))
+                continue;
+            completion_item_add(a, m->name,
+                                m->type[0] ? m->type : m->signature,
+                                COMPLETE_GROUP_MEMBER);
+        }
+    } else {
+        completion_collect_locals(a, &ctx);
+        completion_collect_symbols(a, &ctx);
+        completion_collect_keywords(a, &ctx);
+        completion_collect_types(a, &ctx);
     }
-    completion_collect_locals(a, &ctx);
-    completion_collect_symbols(a, &ctx);
-    completion_collect_keywords(a, &ctx);
-    completion_collect_types(a, &ctx);
     if (a->comp_count == 0) {
         app_completion_close(a);
         return;
@@ -2350,7 +2623,8 @@ void app_completion_update(App *a)
     completion_measure(a);
     if (a->comp_count == 1 && ctx.word_end == b->cursor &&
         strcmp(a->comp_items[0].name, ctx.prefix) == 0) {
-        completion_suppress_current(a, ctx.word_start, ctx.prefix, false);
+        completion_suppress_current(a, ctx.word_start, ctx.prefix,
+                                    ctx.member);
         app_completion_close(a);
         return;
     }
@@ -6691,6 +6965,8 @@ int ui_run(const char *root, const char *initial_file, const char *theme,
         project_cache_save(&a.project, NULL);
     app_save_state(&a);
     term_shutdown();
+    app_completion_reset(&a);
+    free(a.sym_name_index);
     {
         int i;
         for (i = 0; i < a.nbuf; i++)
