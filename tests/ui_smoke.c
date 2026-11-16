@@ -54,6 +54,32 @@ static LocalVar *find_local(App *a, const char *name)
     return NULL;
 }
 
+static bool completion_has(App *a, const char *name)
+{
+    size_t i;
+    for (i = 0; i < a->comp_count; i++) {
+        if (strcmp(a->comp_items[i].name, name) == 0)
+            return true;
+    }
+    return false;
+}
+
+static void move_after_anchor(App *a, const char *anchor)
+{
+    Buffer *b = app_buffer(a);
+    BufMatch m;
+    bool found = buf_find(b, anchor, 0, true, false, &m);
+    check(found, anchor);
+    if (!found)
+        return;
+    b->cursor = (int)(m.pos + strlen(anchor));
+    b->goal_col = buf_visual_col(b, (size_t)b->cursor);
+    buf_insert_at(b, (size_t)b->cursor, "\n", 1);
+    b->cursor++;
+    b->goal_col = 0;
+    app_update_info(a);
+}
+
 int main(int argc, char **argv)
 {
     const char *root = argc > 1 ? argv[1] : "tests/fixtures/demo";
@@ -600,6 +626,106 @@ int main(int argc, char **argv)
                   a.info_def_file >= 0,
               "chooser selects both info and call flow");
         remove(tmp);
+    }
+
+    /* Completion: identifier candidates, accept, Esc, literals. */
+    {
+        int cfi = project_find_file_by_rel(&a.project, "main.c");
+        check(cfi >= 0, "completion main.c");
+        if (cfi >= 0) {
+            const char *anchor =
+                "node.pos.x = result + other + local_p.x + local_q->x;";
+            app_open_file_index(&a, cfi, 1, 0, false);
+            b = app_buffer(&a);
+
+            move_after_anchor(&a, anchor);
+            type_text(&a, "res");
+            check(a.comp_active, "completion opens for res");
+            check(a.comp_count >= 1, "completion has candidates");
+            check(a.comp_items[0].group == COMPLETE_GROUP_LOCAL &&
+                  strcmp(a.comp_items[0].name, "result") == 0,
+                  "local result comes first");
+            key(&a, KEY_TAB, NULL);
+            check(!a.comp_active, "tab closes completion");
+            check(b->cursor >= 6 &&
+                  memcmp(b->data + b->cursor - 6, "result", 6) == 0,
+                  "tab inserts result");
+
+            move_after_anchor(&a, anchor);
+            type_text(&a, "oth");
+            check(a.comp_active && a.comp_count >= 1 &&
+                  strcmp(a.comp_items[0].name, "other") == 0,
+                  "completion finds other");
+            key(&a, KEY_ENTER, NULL);
+            check(!a.comp_active, "enter closes completion");
+
+            move_after_anchor(&a, anchor);
+            type_text(&a, "hel");
+            check(a.comp_active && a.comp_count == 1 &&
+                  strcmp(a.comp_items[0].name, "helper") == 0,
+                  "unique helper still listed");
+            key(&a, KEY_ENTER, NULL);
+
+            move_after_anchor(&a, anchor);
+            type_text(&a, "GRE");
+            check(a.comp_active && completion_has(&a, "GREETING"),
+                  "macro completion");
+            key(&a, KEY_TAB, NULL);
+
+            move_after_anchor(&a, anchor);
+            type_text(&a, "completion_");
+            check(a.comp_active, "project symbol completion");
+            check(completion_has(&a, "completion_demo"),
+                  "function completion");
+            check(completion_has(&a, "completion_origin"),
+                  "global completion");
+            key(&a, KEY_ESC, NULL);
+
+            move_after_anchor(&a, anchor);
+            type_text(&a, "po");
+            check(!a.comp_active, "completion is case sensitive");
+
+            move_after_anchor(&a, anchor);
+            type_text(&a, "// re");
+            check(!a.comp_active, "no completion in comment");
+
+            move_after_anchor(&a, anchor);
+            type_text(&a, "\"re\"");
+            check(!a.comp_active, "no completion in string");
+
+            move_after_anchor(&a, anchor);
+            type_text(&a, "re");
+            check(a.comp_active, "completion before Esc");
+            key(&a, KEY_ESC, NULL);
+            check(!a.comp_active, "Esc closes completion");
+            type_text(&a, "s");
+            check(!a.comp_active, "Esc suppresses same word");
+            type_text(&a, " ");
+            type_text(&a, "re");
+            check(a.comp_active, "space resets suppression");
+            key(&a, KEY_ESC, NULL);
+
+            move_after_anchor(&a, anchor);
+            type_text(&a, "helper");
+            check(!a.comp_active, "full unique candidate hides list");
+
+            {
+                BufMatch m;
+                check(buf_find(b, "result", 0, true, false, &m),
+                      "find result for mid-word accept");
+                b->cursor = (int)m.pos + 3;
+                b->goal_col = buf_visual_col(b, (size_t)b->cursor);
+                app_update_info(&a);
+                app_completion_update(&a);
+                check(a.comp_active, "mid-word completion opens");
+                app_completion_accept(&a);
+                check(b->cursor == (int)m.pos + 6,
+                      "mid-word accept moves cursor to word end");
+                check(!buf_find(b, "resultult", 0, true, false, &m),
+                      "mid-word accept has no duplicate suffix");
+                app_update_info(&a);
+            }
+        }
     }
 
     /* Menu, project switching, and the ANSI formatter. */

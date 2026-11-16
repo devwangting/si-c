@@ -102,6 +102,22 @@ typedef struct {
 } ChooserItem;
 
 typedef struct {
+    const char *name;
+    const char *detail;
+    unsigned char group;
+} CompleteItem;
+
+enum {
+    COMPLETE_GROUP_LOCAL = 0,
+    COMPLETE_GROUP_GLOBAL,
+    COMPLETE_GROUP_FUNCTION,
+    COMPLETE_GROUP_MACRO,
+    COMPLETE_GROUP_TYPE,
+    COMPLETE_GROUP_KEYWORD,
+    COMPLETE_GROUP_MEMBER
+};
+
+typedef struct {
     Project project;
     StrList recent_projects;
     StrList globals;
@@ -154,6 +170,39 @@ typedef struct {
     int chooser_scroll;
     int context_sym;
     bool pin_context;
+
+    Symbol **sym_name_index;
+    size_t sym_name_count;
+
+    bool comp_active;
+    bool comp_member;
+    int comp_buf;
+    int comp_line;
+    int comp_word_start;
+    int comp_word_end;
+    int comp_prefix_len;
+    char comp_prefix[256];
+    CompleteItem *comp_items;
+    size_t comp_count;
+    size_t comp_cap;
+    int comp_sel;
+    int comp_scroll;
+    int comp_popup_x;
+    int comp_popup_y;
+    int comp_popup_w;
+    int comp_popup_h;
+    int comp_popup_first;
+    int comp_popup_rows;
+    long comp_click_time;
+    int comp_click_index;
+    int comp_click_x;
+    int comp_click_y;
+    bool comp_suppress;
+    int comp_suppress_buf;
+    int comp_suppress_line;
+    int comp_suppress_start;
+    char comp_suppress_word[256];
+    bool comp_suppress_member;
 
     bool relations_pending;
     bool relation_building;
@@ -294,6 +343,18 @@ void app_render(App *a);
 void app_use_theme(App *a, const char *name);
 void app_handle_key_event(App *a, int code, const char *text);
 void app_handle_mouse_event(App *a, int x, int y, int button, bool release);
+
+void app_completion_close(App *a);
+void app_completion_update(App *a);
+void app_completion_accept(App *a);
+void app_completion_reset(App *a);
+void app_completion_move(App *a, int delta);
+void app_completion_fix(App *a);
+bool app_completion_handle_key(App *a, KeyEvent *ev);
+bool app_completion_handle_mouse(App *a, KeyEvent *ev);
+bool app_completion_geometry(App *a, int *x, int *y, int *w, int *h,
+                             int *first, int *rows);
+bool app_completion_suppresses_word(App *a, const char *word);
 
 #define APP_MENU_GROUPS 4
 #define APP_PROJECT_PICKER_MAX_W 78

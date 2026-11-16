@@ -283,6 +283,16 @@ void app_view_clear(View *v)
     v->title[0] = '\0';
 }
 
+static int cmp_symbol_ptr_name(const void *pa, const void *pb)
+{
+    Symbol *const *sa = pa;
+    Symbol *const *sb = pb;
+    int c = strcmp((*sa)->name, (*sb)->name);
+    if (c)
+        return c;
+    return (int)(*sa)->kind - (int)(*sb)->kind;
+}
+
 void app_rebuild_globals(App *a)
 {
     size_t i;
@@ -316,6 +326,20 @@ void app_rebuild_globals(App *a)
     strlist_sort(&a->globals);
     strlist_sort(&a->types);
     strlist_sort(&a->macros);
+
+    free(a->sym_name_index);
+    a->sym_name_index = NULL;
+    a->sym_name_count = 0;
+    if (a->project.sym_count > 0) {
+        a->sym_name_index =
+            xmalloc(a->project.sym_count * sizeof(*a->sym_name_index));
+        for (i = 0; i < a->project.sym_count; i++)
+            a->sym_name_index[i] = &a->project.syms[i];
+        a->sym_name_count = a->project.sym_count;
+        qsort(a->sym_name_index, a->sym_name_count,
+              sizeof(*a->sym_name_index), cmp_symbol_ptr_name);
+    }
+    app_completion_reset(a);
 }
 
 static ViewItem *view_add(View *v, const char *label, const char *detail,
@@ -517,6 +541,7 @@ static void set_cursor_line_col(App *a, Buffer *b, int line, int col)
 
 void app_open_file_index(App *a, int fi, int line, int col, bool record)
 {
+    app_completion_close(a);
     Buffer *b;
     int idx;
     const char *path;
@@ -567,6 +592,7 @@ void app_open_file_index(App *a, int fi, int line, int col, bool record)
 
 int app_open_path(App *a, const char *path, int line, bool record)
 {
+    app_completion_close(a);
     char *abs;
     int fi;
     int idx;
@@ -1825,6 +1851,577 @@ bool app_local_in_scope(App *a, int line, const char *name, size_t len)
     return find_local_var(a, line, name, len) != NULL;
 }
 
+/* ------------------------------------------------------------------ */
+/* Completion                                                          */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    bool member;
+    int line;
+    int word_start;
+    int word_end;
+    int prefix_len;
+    char prefix[256];
+} CompletionContext;
+
+static bool completion_ident(unsigned char c)
+{
+    return isalnum(c) || c == '_';
+}
+
+static void completion_word_bounds(Buffer *b, int pos, int *start, int *end)
+{
+    int line_start;
+    int line_end;
+    int s;
+    int e;
+
+    if (!b)
+        pos = 0;
+    if (pos < 0)
+        pos = 0;
+    if ((size_t)pos > b->len)
+        pos = (int)b->len;
+    line_start = (int)buf_line_start(b, buf_line_of_offset(b, (size_t)pos));
+    line_end = (int)buf_line_content_end(b, buf_line_of_offset(b, (size_t)pos));
+    s = pos;
+    while (s > line_start && completion_ident((unsigned char)b->data[s - 1]))
+        s--;
+    e = pos;
+    while (e < line_end && completion_ident((unsigned char)b->data[e]))
+        e++;
+    *start = s;
+    *end = e;
+}
+
+static void completion_suppression_clear(App *a)
+{
+    a->comp_suppress = false;
+    a->comp_suppress_word[0] = '\0';
+    a->comp_suppress_member = false;
+}
+
+static bool completion_suppression_valid(App *a)
+{
+    Buffer *b;
+    int line;
+    int start;
+    int end;
+    char word[256];
+    size_t n;
+    size_t sn;
+
+    if (!a->comp_suppress)
+        return false;
+    b = app_buffer(a);
+    if (!b || a->active != a->comp_suppress_buf) {
+        completion_suppression_clear(a);
+        return false;
+    }
+    line = buf_line_of_offset(b, (size_t)b->cursor) + 1;
+    if (line != a->comp_suppress_line) {
+        completion_suppression_clear(a);
+        return false;
+    }
+    completion_word_bounds(b, b->cursor, &start, &end);
+    (void)end;
+    if (start != a->comp_suppress_start) {
+        completion_suppression_clear(a);
+        return false;
+    }
+    n = (size_t)(b->cursor - start);
+    if (n >= sizeof(word))
+        n = sizeof(word) - 1;
+    memcpy(word, b->data + start, n);
+    word[n] = '\0';
+    if (a->comp_suppress_member && a->comp_suppress_word[0] == '\0')
+        return true;
+    if (n == 0)
+        return true;
+    sn = strlen(a->comp_suppress_word);
+    if (n <= sn && memcmp(word, a->comp_suppress_word, n) == 0)
+        return true;
+    if (sn <= n && memcmp(word, a->comp_suppress_word, sn) == 0)
+        return true;
+    completion_suppression_clear(a);
+    return false;
+}
+
+static void completion_suppress_current(App *a, int word_start,
+                                        const char *word, bool member)
+{
+    a->comp_suppress = true;
+    a->comp_suppress_buf = a->active;
+    a->comp_suppress_line = a->comp_line;
+    a->comp_suppress_start = word_start;
+    a->comp_suppress_member = member;
+    snprintf(a->comp_suppress_word, sizeof(a->comp_suppress_word), "%s",
+             word ? word : "");
+}
+
+bool app_completion_suppresses_word(App *a, const char *word)
+{
+    size_t n;
+    size_t sn;
+
+    if (!word)
+        return false;
+    if (a->comp_active && strcmp(a->comp_prefix, word) == 0)
+        return true;
+    if (!completion_suppression_valid(a))
+        return false;
+    if (a->comp_suppress_member && a->comp_suppress_word[0] == '\0')
+        return true;
+    n = strlen(word);
+    sn = strlen(a->comp_suppress_word);
+    if (n <= sn && memcmp(word, a->comp_suppress_word, n) == 0)
+        return true;
+    return sn <= n && memcmp(word, a->comp_suppress_word, sn) == 0;
+}
+
+void app_completion_close(App *a)
+{
+    if (!a)
+        return;
+    free(a->comp_items);
+    a->comp_items = NULL;
+    a->comp_count = 0;
+    a->comp_cap = 0;
+    a->comp_active = false;
+    a->comp_sel = 0;
+    a->comp_scroll = 0;
+    a->comp_popup_rows = 0;
+    a->comp_popup_first = 0;
+}
+
+void app_completion_reset(App *a)
+{
+    app_completion_close(a);
+    completion_suppression_clear(a);
+}
+
+void app_completion_fix(App *a)
+{
+    int rows = a->comp_popup_rows > 0 ? a->comp_popup_rows : 1;
+    if (a->comp_count == 0) {
+        app_completion_close(a);
+        return;
+    }
+    if (a->comp_sel < 0)
+        a->comp_sel = 0;
+    if ((size_t)a->comp_sel >= a->comp_count)
+        a->comp_sel = (int)a->comp_count - 1;
+    if (a->comp_sel < a->comp_scroll)
+        a->comp_scroll = a->comp_sel;
+    if (a->comp_sel >= a->comp_scroll + rows)
+        a->comp_scroll = a->comp_sel - rows + 1;
+    if (a->comp_scroll < 0)
+        a->comp_scroll = 0;
+}
+
+void app_completion_move(App *a, int delta)
+{
+    if (!a->comp_active)
+        return;
+    a->comp_sel += delta;
+    app_completion_fix(a);
+}
+
+static bool completion_context(App *a, CompletionContext *ctx)
+{
+    Buffer *b;
+    HlSpan spans[512];
+    int ns;
+    int i;
+    int pos;
+    int line;
+    int line_start;
+    int line_end;
+    int start;
+    int end;
+    int p;
+
+    if (a->focus != FOCUS_EDITOR || a->prompt != PROMPT_NONE ||
+        a->help || a->menu_active || a->chooser_active || a->dir_active ||
+        a->project_picker_active || a->context_menu_active ||
+        a->relation_building || a->relation_ready_prompt ||
+        a->relations_large_prompt || a->has_selection)
+        return false;
+    b = app_buffer(a);
+    if (!b)
+        return false;
+    pos = b->cursor;
+    line = buf_line_of_offset(b, (size_t)pos);
+    line_start = (int)buf_line_start(b, line);
+    line_end = (int)buf_line_content_end(b, line);
+    ns = syntax_line_spans(&b->syn, b, line, spans,
+                           (int)SI_ARRAY_LEN(spans));
+    for (i = 0; i < ns; i++) {
+        int rel = pos - line_start;
+        if (rel < spans[i].start || rel > spans[i].end)
+            continue;
+        if (spans[i].kind == HL_COMMENT || spans[i].kind == HL_STRING ||
+            spans[i].kind == HL_PREPROC)
+            return false;
+    }
+    completion_word_bounds(b, pos, &start, &end);
+    if (end > line_end)
+        end = line_end;
+    memset(ctx, 0, sizeof(*ctx));
+    ctx->line = line + 1;
+    ctx->word_start = start;
+    ctx->word_end = end;
+    ctx->prefix_len = pos - start;
+    if (ctx->prefix_len > 0) {
+        unsigned char first = (unsigned char)b->data[start];
+        if (!(isalpha(first) || first == '_'))
+            return false;
+    }
+    p = start;
+    while (p > line_start &&
+           (b->data[p - 1] == ' ' || b->data[p - 1] == '\t'))
+        p--;
+    if (p > line_start && b->data[p - 1] == '.')
+        ctx->member = true;
+    else if (p >= line_start + 2 && b->data[p - 1] == '>' &&
+             b->data[p - 2] == '-')
+        ctx->member = true;
+    if (ctx->prefix_len == 0 && !ctx->member)
+        return false;
+    if (ctx->prefix_len > (int)sizeof(ctx->prefix) - 1)
+        ctx->prefix_len = (int)sizeof(ctx->prefix) - 1;
+    memcpy(ctx->prefix, b->data + start, (size_t)ctx->prefix_len);
+    ctx->prefix[ctx->prefix_len] = '\0';
+    return true;
+}
+
+static void completion_item_add(App *a, const char *name, const char *detail,
+                                unsigned char group)
+{
+    CompleteItem *it;
+    if (!name || !*name)
+        return;
+    if (a->comp_count == a->comp_cap) {
+        a->comp_cap = a->comp_cap ? a->comp_cap * 2 : 32;
+        a->comp_items = xrealloc(a->comp_items,
+                                 a->comp_cap * sizeof(*a->comp_items));
+    }
+    it = &a->comp_items[a->comp_count++];
+    it->name = name;
+    it->detail = detail ? detail : "";
+    it->group = group;
+}
+
+static int cmp_complete_name(const void *pa, const void *pb)
+{
+    const CompleteItem *a = pa;
+    const CompleteItem *b = pb;
+    int c = strcmp(a->name, b->name);
+    if (c)
+        return c;
+    return (int)a->group - (int)b->group;
+}
+
+static int cmp_complete_group(const void *pa, const void *pb)
+{
+    const CompleteItem *a = pa;
+    const CompleteItem *b = pb;
+    if (a->group != b->group)
+        return (int)a->group - (int)b->group;
+    return strcmp(a->name, b->name);
+}
+
+static void completion_sort_items(App *a)
+{
+    size_t i;
+    size_t out;
+
+    if (a->comp_count > 1)
+        qsort(a->comp_items, a->comp_count, sizeof(*a->comp_items),
+              cmp_complete_name);
+    out = 0;
+    for (i = 0; i < a->comp_count; i++) {
+        if (out > 0 &&
+            strcmp(a->comp_items[out - 1].name, a->comp_items[i].name) == 0)
+            continue;
+        if (out != i)
+            a->comp_items[out] = a->comp_items[i];
+        out++;
+    }
+    a->comp_count = out;
+    if (a->comp_count > 1)
+        qsort(a->comp_items, a->comp_count, sizeof(*a->comp_items),
+              cmp_complete_group);
+}
+
+static void completion_collect_locals(App *a, const CompletionContext *ctx)
+{
+    size_t i;
+    size_t j;
+    for (i = 0; i < a->nlocals; i++) {
+        LocalVar *v = &a->locals[i];
+        bool shadowed = false;
+        if (ctx->line < v->line || ctx->line > v->end_line)
+            continue;
+        if (ctx->prefix_len > 0 &&
+            (strlen(v->name) < (size_t)ctx->prefix_len ||
+             memcmp(v->name, ctx->prefix, (size_t)ctx->prefix_len) != 0))
+            continue;
+        for (j = 0; j < a->nlocals; j++) {
+            LocalVar *w = &a->locals[j];
+            if (j == i || strcmp(v->name, w->name) != 0)
+                continue;
+            if (ctx->line < w->line || ctx->line > w->end_line)
+                continue;
+            if (w->line > v->line) {
+                shadowed = true;
+                break;
+            }
+        }
+        if (shadowed)
+            continue;
+        completion_item_add(a, v->name, v->type, COMPLETE_GROUP_LOCAL);
+    }
+}
+
+static int completion_symbol_group(SymbolKind kind)
+{
+    switch (kind) {
+    case SYM_VARIABLE:
+    case SYM_ENUMVAL:
+        return COMPLETE_GROUP_GLOBAL;
+    case SYM_FUNCTION:
+    case SYM_PROTOTYPE:
+        return COMPLETE_GROUP_FUNCTION;
+    case SYM_MACRO:
+        return COMPLETE_GROUP_MACRO;
+    case SYM_STRUCT:
+    case SYM_UNION:
+    case SYM_ENUM:
+    case SYM_CLASS:
+    case SYM_TYPEDEF:
+        return COMPLETE_GROUP_TYPE;
+    default:
+        return -1;
+    }
+}
+
+static const char *completion_symbol_detail(Symbol *s)
+{
+    switch (s->kind) {
+    case SYM_STRUCT:
+    case SYM_UNION:
+    case SYM_ENUM:
+    case SYM_CLASS:
+    case SYM_TYPEDEF:
+        return symbol_kind_short(s->kind);
+    default:
+        return s->signature;
+    }
+}
+
+static size_t completion_lower_bound(App *a, const char *prefix, size_t len)
+{
+    size_t lo = 0;
+    size_t hi = a->sym_name_count;
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        if (strncmp(a->sym_name_index[mid]->name, prefix, len) < 0)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    return lo;
+}
+
+static void completion_collect_symbols(App *a, const CompletionContext *ctx)
+{
+    size_t i;
+    size_t lo;
+    if (!a->sym_name_index || a->sym_name_count == 0)
+        return;
+    lo = completion_lower_bound(a, ctx->prefix, (size_t)ctx->prefix_len);
+    for (i = lo; i < a->sym_name_count; i++) {
+        Symbol *s = a->sym_name_index[i];
+        int group;
+        if (strncmp(s->name, ctx->prefix, (size_t)ctx->prefix_len) != 0)
+            break;
+        group = completion_symbol_group(s->kind);
+        if (group < 0)
+            continue;
+        completion_item_add(a, s->name, completion_symbol_detail(s),
+                            (unsigned char)group);
+    }
+}
+
+static void completion_collect_keywords(App *a, const CompletionContext *ctx)
+{
+    size_t i;
+    for (i = 0; i < syntax_keyword_count(); i++) {
+        const char *word = syntax_keyword_at(i);
+        if (ctx->prefix_len > 0 &&
+            (strlen(word) < (size_t)ctx->prefix_len ||
+             memcmp(word, ctx->prefix, (size_t)ctx->prefix_len) != 0))
+            continue;
+        completion_item_add(a, word, "keyword", COMPLETE_GROUP_KEYWORD);
+    }
+}
+
+static void completion_collect_types(App *a, const CompletionContext *ctx)
+{
+    size_t i;
+    for (i = 0; i < syntax_type_count(); i++) {
+        const char *word = syntax_type_at(i);
+        if (ctx->prefix_len > 0 &&
+            (strlen(word) < (size_t)ctx->prefix_len ||
+             memcmp(word, ctx->prefix, (size_t)ctx->prefix_len) != 0))
+            continue;
+        completion_item_add(a, word, "type", COMPLETE_GROUP_TYPE);
+    }
+}
+
+void app_completion_update(App *a)
+{
+    CompletionContext ctx;
+    Buffer *b;
+
+    a->comp_popup_rows = 0;
+    if (!completion_context(a, &ctx)) {
+        app_completion_close(a);
+        return;
+    }
+    if (completion_suppression_valid(a)) {
+        app_completion_close(a);
+        return;
+    }
+    b = app_buffer(a);
+    if (a->locals_buf != a->active || a->locals_rev != b->rev)
+        app_rebuild_locals(a);
+    free(a->comp_items);
+    a->comp_items = NULL;
+    a->comp_count = 0;
+    a->comp_cap = 0;
+    a->comp_buf = a->active;
+    a->comp_line = ctx.line;
+    a->comp_word_start = ctx.word_start;
+    a->comp_word_end = ctx.word_end;
+    a->comp_prefix_len = ctx.prefix_len;
+    snprintf(a->comp_prefix, sizeof(a->comp_prefix), "%s", ctx.prefix);
+    a->comp_member = ctx.member;
+    if (ctx.member) {
+        app_completion_close(a);
+        return;
+    }
+    completion_collect_locals(a, &ctx);
+    completion_collect_symbols(a, &ctx);
+    completion_collect_keywords(a, &ctx);
+    completion_collect_types(a, &ctx);
+    if (a->comp_count == 0) {
+        app_completion_close(a);
+        return;
+    }
+    completion_sort_items(a);
+    if (a->comp_count == 1 && ctx.word_end == b->cursor &&
+        strcmp(a->comp_items[0].name, ctx.prefix) == 0) {
+        completion_suppress_current(a, ctx.word_start, ctx.prefix, false);
+        app_completion_close(a);
+        return;
+    }
+    a->comp_active = true;
+    a->comp_sel = 0;
+    a->comp_scroll = 0;
+    app_completion_fix(a);
+}
+
+void app_completion_accept(App *a)
+{
+    char *name;
+    size_t name_len;
+    int prefix_len;
+    int word_start;
+    int word_end;
+    int cursor;
+    Buffer *b;
+
+    if (!a->comp_active || a->comp_count == 0)
+        return;
+    b = app_buffer(a);
+    if (!b)
+        return;
+    name = xstrdup(a->comp_items[a->comp_sel].name);
+    name_len = strlen(name);
+    prefix_len = a->comp_prefix_len;
+    word_start = a->comp_word_start;
+    word_end = a->comp_word_end;
+    cursor = b->cursor;
+    if (word_start < 0 || word_end < word_start ||
+        (size_t)word_end > b->len || cursor < word_start ||
+        cursor > word_end) {
+        free(name);
+        app_completion_close(a);
+        return;
+    }
+    if (prefix_len <= (int)name_len &&
+        strncmp(name, a->comp_prefix, (size_t)prefix_len) == 0) {
+        if (word_end > cursor)
+            delete_at_cursor(a, (size_t)cursor, (size_t)(word_end - cursor));
+        if (name_len > (size_t)prefix_len)
+            insert_at_cursor(a, name + prefix_len, name_len -
+                             (size_t)prefix_len);
+    } else {
+        delete_at_cursor(a, (size_t)word_start,
+                         (size_t)(word_end - word_start));
+        insert_at_cursor(a, name, name_len);
+    }
+    completion_suppress_current(a, word_start, name, a->comp_member);
+    free(name);
+    app_completion_close(a);
+}
+
+bool app_completion_handle_key(App *a, KeyEvent *ev)
+{
+    if (!a->comp_active || a->comp_count == 0)
+        return false;
+    switch (ev->code) {
+    case KEY_TAB:
+    case KEY_ENTER:
+        app_completion_accept(a);
+        return true;
+    case KEY_ESC:
+        completion_suppress_current(a, a->comp_word_start, a->comp_prefix,
+                                    a->comp_member);
+        app_completion_close(a);
+        return true;
+    case KEY_CHAR:
+    case KEY_BACKSPACE:
+    case KEY_DELETE:
+        return false;
+    default:
+        app_completion_close(a);
+        return false;
+    }
+}
+
+bool app_completion_handle_mouse(App *a, KeyEvent *ev)
+{
+    (void)a;
+    (void)ev;
+    return false;
+}
+
+bool app_completion_geometry(App *a, int *x, int *y, int *w, int *h,
+                             int *first, int *rows)
+{
+    (void)a;
+    (void)x;
+    (void)y;
+    (void)w;
+    (void)h;
+    (void)first;
+    (void)rows;
+    return false;
+}
+
 static bool symbol_is_extern_var(const Symbol *s)
 {
     return s->kind == SYM_VARIABLE && s->signature &&
@@ -2425,6 +3022,7 @@ static void app_chooser_fix(App *a)
 static void app_chooser_open(App *a, const IntList *defs, const char *word)
 {
     size_t i;
+    app_completion_close(a);
     app_chooser_close(a);
     a->chooser_items = xcalloc(defs->count, sizeof(*a->chooser_items));
     a->chooser_count = defs->count;
@@ -2754,6 +3352,7 @@ void app_sync_callflow(App *a)
 
 static void app_reload_project(App *a)
 {
+    app_completion_close(a);
     char *root = a->project.root ? xstrdup(a->project.root) : NULL;
     Project np;
     ProgressCtx pctx;
@@ -3854,6 +4453,7 @@ static void prompt_set(App *a, const char *text)
 
 static void app_prompt_begin(App *a, PromptKind kind, const char *initial)
 {
+    app_completion_close(a);
     a->prompt_prev_focus = a->focus;
     a->prompt = kind;
     prompt_set(a, initial);
@@ -4134,6 +4734,7 @@ static void move_page(App *a, int dir)
 
 static void app_request_quit(App *a)
 {
+    app_completion_close(a);
     if (any_dirty(a)) {
         a->prompt = PROMPT_QUIT;
         app_set_status(a, "Unsaved changes: y = save all, n = discard, c = cancel");
@@ -4266,6 +4867,7 @@ static void app_menu_open_group(App *a, int group)
 
 static void app_menu_open(App *a)
 {
+    app_completion_close(a);
     app_menu_open_group(a, 0);
 }
 
@@ -4400,8 +5002,10 @@ static void app_handle_editor_key(App *a, KeyEvent *ev)
         return;
     switch (ev->code) {
     case KEY_CHAR:
-        if (ev->len > 0)
+        if (ev->len > 0) {
             insert_at_cursor(a, ev->text, (size_t)ev->len);
+            app_completion_update(a);
+        }
         break;
     case KEY_ENTER:
         editor_enter(a);
@@ -4411,9 +5015,11 @@ static void app_handle_editor_key(App *a, KeyEvent *ev)
         break;
     case KEY_BACKSPACE:
         editor_backspace(a);
+        app_completion_update(a);
         break;
     case KEY_DELETE:
         editor_delete(a);
+        app_completion_update(a);
         break;
     case KEY_LEFT:
         move_horizontal(a, -1);
@@ -5339,6 +5945,10 @@ static void app_handle_key(App *a, KeyEvent *ev)
     if (a->project_picker_active) {
         app_project_picker_handle(a, ev);
         return;
+    }
+    if (a->comp_active) {
+        if (app_completion_handle_key(a, ev))
+            return;
     }
     if (ev->code == KEY_MOUSE) {
         app_handle_mouse(a, ev);
