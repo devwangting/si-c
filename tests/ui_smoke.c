@@ -917,7 +917,41 @@ int main(int argc, char **argv)
                 app_layout(&a);
                 app_render(&a);
             }
+            {
+                int mx = a.comp_popup_x + 2;
+                int my = a.comp_popup_y + 1;
+                int cur = b->cursor;
+                char first[256];
+                snprintf(first, sizeof(first), "%s", a.comp_items[0].name);
+                app_handle_mouse_event(&a, mx, my, 0, false);
+                check(a.comp_active && a.comp_sel == 0,
+                      "single click only selects");
+                check(b->cursor == cur, "single click does not insert");
+                app_handle_mouse_event(&a, mx, my, 0, false);
+                check(!a.comp_active, "double click accepts");
+                check(b->cursor >= (int)strlen(first) &&
+                      memcmp(b->data + b->cursor - strlen(first), first,
+                             strlen(first)) == 0,
+                      "double click inserts selected item");
+            }
+
+            move_after_anchor(&a, anchor);
+            type_text(&a, "co");
+            app_render(&a);
+            {
+                int mx = a.comp_popup_x + 2;
+                int my = a.comp_popup_y + 1;
+                app_handle_mouse_event(&a, mx, my, 65, false);
+                check(a.comp_active && a.comp_sel > 0,
+                      "wheel moves completion selection");
+            }
             key(&a, KEY_ESC, NULL);
+
+            move_after_anchor(&a, anchor);
+            type_text(&a, "co");
+            app_render(&a);
+            app_handle_mouse_event(&a, 0, 1, 0, false);
+            check(!a.comp_active, "outside click closes popup");
 
             app_completion_reset(&a);
             buf_delete_range(b, 0, b->len);

@@ -2717,6 +2717,8 @@ bool app_completion_handle_key(App *a, KeyEvent *ev)
     case KEY_BACKSPACE:
     case KEY_DELETE:
         return false;
+    case KEY_MOUSE:
+        return app_completion_handle_mouse(a, ev);
     default:
         app_completion_close(a);
         return false;
@@ -2725,8 +2727,56 @@ bool app_completion_handle_key(App *a, KeyEvent *ev)
 
 bool app_completion_handle_mouse(App *a, KeyEvent *ev)
 {
-    (void)a;
-    (void)ev;
+    int x;
+    int y;
+    int w;
+    int h;
+    int first;
+    int rows;
+    int mx;
+    int my;
+
+    if (!a->comp_active || a->comp_count == 0)
+        return false;
+    if (!app_completion_geometry(a, &x, &y, &w, &h, &first, &rows))
+        return false;
+    mx = ev->mouse_x;
+    my = ev->mouse_y;
+    if (ev->mouse_button == 64 || ev->mouse_button == 65) {
+        if (mx > x && mx < x + w - 1 && my > y && my < y + h - 1) {
+            app_completion_move(a, ev->mouse_button == 64 ? -3 : 3);
+            return true;
+        }
+        return false;
+    }
+    if (ev->mouse_release)
+        return false;
+    if (ev->mouse_button != 0) {
+        app_completion_close(a);
+        return false;
+    }
+    if (mx > x && mx < x + w - 1 && my > y && my < y + h - 1) {
+        int idx = first + (my - y - 1);
+        long now = (long)time(NULL);
+        if (idx >= 0 && (size_t)idx < a->comp_count) {
+            if (idx == a->comp_sel && a->comp_click_time > 0 &&
+                now - a->comp_click_time <= 1 &&
+                abs(mx - a->comp_click_x) <= 2 &&
+                abs(my - a->comp_click_y) <= 2) {
+                app_completion_accept(a);
+                return true;
+            }
+            a->comp_sel = idx;
+            app_completion_fix(a);
+            a->comp_click_time = now;
+            a->comp_click_index = idx;
+            a->comp_click_x = mx;
+            a->comp_click_y = my;
+            return true;
+        }
+        return false;
+    }
+    app_completion_close(a);
     return false;
 }
 
