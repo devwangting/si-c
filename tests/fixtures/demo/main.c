@@ -43,3 +43,32 @@ int use_local_usage(void)
     return usage(1);
 }
 
+typedef struct CompletionNode {
+    Point pos;
+    struct CompletionNode *next;
+    int alpha, beta;
+} CompletionNode;
+
+typedef struct {
+    int alpha, beta;
+} CompletionAnon;
+
+struct CompletionForward;
+
+struct Point completion_origin;
+Point completion_world = {1, 2};
+struct Point *completion_ptr;
+int completion_a, completion_b;
+struct Point completion_p, *completion_q;
+int completion_arr[4];
+
+int completion_demo(void)
+{
+    int result = 0, other;
+    Point local_p, *local_q;
+    CompletionNode node;
+    node.pos.x = result + other + local_p.x + local_q->x;
+    return node.pos.y + completion_origin.x + completion_world.y +
+           completion_ptr->x;
+}
+

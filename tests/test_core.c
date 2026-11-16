@@ -34,6 +34,21 @@ static void check(bool cond, const char *what)
     }
 }
 
+static void check_variable(Project *p, const char *name,
+                           const char *type_fragment)
+{
+    IntList ids;
+    intlist_init(&ids);
+    project_find_symbols(p, name, &ids);
+    check(ids.count == 1, name);
+    if (ids.count == 1) {
+        Symbol *s = &p->syms[ids.items[0]];
+        check(s->kind == SYM_VARIABLE, name);
+        check(strstr(s->signature, type_fragment) != NULL, name);
+    }
+    intlist_free(&ids);
+}
+
 static void test_utf8(void)
 {
     const char *s = "a\xe4\xb8\xad" "b";
@@ -264,6 +279,19 @@ static void test_project(const char *root)
     project_search_text(&p, "GREETING", &locs);
     check(locs.count >= 2, "text search macro uses");
     loclist_free(&locs);
+
+    check_variable(&p, "completion_origin", "struct Point");
+    check_variable(&p, "completion_world", "Point");
+    check_variable(&p, "completion_ptr", "Point");
+    check_variable(&p, "completion_a", "int");
+    check_variable(&p, "completion_b", "int");
+    check_variable(&p, "completion_p", "struct Point");
+    check_variable(&p, "completion_q", "struct Point *");
+    check_variable(&p, "completion_arr", "int");
+    intlist_init(&ids);
+    project_find_symbols(&p, "CompletionForward", &ids);
+    check(ids.count == 0, "forward declaration is not a variable");
+    intlist_free(&ids);
 
     for (i = 0; i < p.sym_count; i++)
         check(p.syms[i].name != NULL && p.syms[i].signature != NULL,

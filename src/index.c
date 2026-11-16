@@ -429,17 +429,42 @@ const char *symbol_kind_short(SymbolKind kind)
     return kind_word(kind);
 }
 
-static int add_symbol(Parser *ps, SymbolKind kind, int name_tok,
-                      int sig_start, int sig_end, int end_line)
+static int add_symbol_raw(Parser *ps, SymbolKind kind, int name_tok,
+                          const char *signature, int end_line)
 {
     Symbol *s;
-    Str sig;
-    int i;
-    char prev = '\0';
 
     if (name_tok < 0 || name_tok >= ps->n)
         return -1;
     if (ps->proj->sym_count >= SI_MAX_SYMBOLS)
+        return -1;
+    if (ps->proj->sym_count == ps->proj->sym_cap) {
+        ps->proj->sym_cap = ps->proj->sym_cap ? ps->proj->sym_cap * 2 : 256;
+        ps->proj->syms = xrealloc(ps->proj->syms,
+                                  ps->proj->sym_cap * sizeof(*ps->proj->syms));
+    }
+    s = &ps->proj->syms[ps->proj->sym_count++];
+    memset(s, 0, sizeof(*s));
+    s->name = xstrndup(ps->src + ps->t[name_tok].start,
+                       (size_t)ps->t[name_tok].len);
+    s->signature = xstrdup(signature && *signature ? signature : s->name);
+    s->file_index = ps->file_index;
+    s->line = ps->t[name_tok].line;
+    s->col = ps->t[name_tok].col;
+    s->end_line = end_line > 0 ? end_line : s->line;
+    s->kind = kind;
+    return (int)ps->proj->sym_count - 1;
+}
+
+static int add_symbol(Parser *ps, SymbolKind kind, int name_tok,
+                      int sig_start, int sig_end, int end_line)
+{
+    Str sig;
+    int i;
+    char prev = '\0';
+    int rc;
+
+    if (name_tok < 0 || name_tok >= ps->n)
         return -1;
 
     str_init(&sig);
@@ -479,23 +504,9 @@ static int add_symbol(Parser *ps, SymbolKind kind, int name_tok,
     }
     if (sig.len == 0)
         str_putc(&sig, '?');
-
-    if (ps->proj->sym_count == ps->proj->sym_cap) {
-        ps->proj->sym_cap = ps->proj->sym_cap ? ps->proj->sym_cap * 2 : 256;
-        ps->proj->syms = xrealloc(ps->proj->syms,
-                                  ps->proj->sym_cap * sizeof(*ps->proj->syms));
-    }
-    s = &ps->proj->syms[ps->proj->sym_count++];
-    memset(s, 0, sizeof(*s));
-    s->name = xstrndup(ps->src + ps->t[name_tok].start,
-                       (size_t)ps->t[name_tok].len);
-    s->signature = sig.data ? sig.data : xstrdup(s->name);
-    s->file_index = ps->file_index;
-    s->line = ps->t[name_tok].line;
-    s->col = ps->t[name_tok].col;
-    s->end_line = end_line > 0 ? end_line : s->line;
-    s->kind = kind;
-    return (int)ps->proj->sym_count - 1;
+    rc = add_symbol_raw(ps, kind, name_tok, sig.data, end_line);
+    str_free(&sig);
+    return rc;
 }
 
 static int matching_brace(const Parser *ps, int open)
@@ -912,37 +923,147 @@ static void parse_functions(Parser *ps)
     free(scope_stack);
 }
 
-static void variable_segment(Parser *ps, int seg, int end, bool first_seg)
+static int first_top_level_equal(const Parser *ps, int start, int end)
 {
-    int limit = end;
-    int q;
-    int name = -1;
+    int i;
+    int paren = 0;
+    int brack = 0;
+    int brace = 0;
 
-    if (end <= seg)
-        return;
-    for (q = seg; q < end; q++) {
-        if (tok_is(ps, q, '=')) {
-            limit = q;
-            break;
+    for (i = start; i < end; i++) {
+        if (tok_is(ps, i, '('))
+            paren++;
+        else if (tok_is(ps, i, ')') && paren > 0)
+            paren--;
+        else if (tok_is(ps, i, '['))
+            brack++;
+        else if (tok_is(ps, i, ']') && brack > 0)
+            brack--;
+        else if (tok_is(ps, i, '{'))
+            brace++;
+        else if (tok_is(ps, i, '}') && brace > 0)
+            brace--;
+        else if (tok_is(ps, i, '=') && paren == 0 && brack == 0 &&
+                 brace == 0)
+            return i;
+    }
+    return -1;
+}
+
+static int first_top_level_comma(const Parser *ps, int start, int end)
+{
+    int i;
+    int paren = 0;
+    int brack = 0;
+    int brace = 0;
+
+    for (i = start; i < end; i++) {
+        if (tok_is(ps, i, '('))
+            paren++;
+        else if (tok_is(ps, i, ')') && paren > 0)
+            paren--;
+        else if (tok_is(ps, i, '['))
+            brack++;
+        else if (tok_is(ps, i, ']') && brack > 0)
+            brack--;
+        else if (tok_is(ps, i, '{'))
+            brace++;
+        else if (tok_is(ps, i, '}') && brace > 0)
+            brace--;
+        else if (tok_is(ps, i, ',') && paren == 0 && brack == 0 &&
+                 brace == 0)
+            return i;
+    }
+    return -1;
+}
+
+static bool has_call_before_equal(const Parser *ps, int start, int end)
+{
+    int eq = first_top_level_equal(ps, start, end);
+    int stop = eq >= 0 ? eq : end;
+    int i;
+    int brace = 0;
+
+    for (i = start; i < stop; i++) {
+        if (tok_is(ps, i, '{')) {
+            brace++;
+        } else if (tok_is(ps, i, '}') && brace > 0) {
+            brace--;
+        } else if (brace == 0 && tok_is(ps, i, '(')) {
+            return true;
         }
     }
+    return false;
+}
+
+static int last_ident_before(const Parser *ps, int start, int end)
+{
+    int i = end - 1;
+
+    while (i >= start && !tok_ident(ps, i))
+        i--;
+    return i >= start ? i : -1;
+}
+
+static bool type_suffix_token(const Parser *ps, int i)
+{
+    return tok_is(ps, i, '*') || tok_is(ps, i, '&') ||
+           tok_text(ps, i, "const") || tok_text(ps, i, "volatile") ||
+           tok_text(ps, i, "restrict") || tok_text(ps, i, "_Atomic") ||
+           tok_text(ps, i, "__restrict") || tok_text(ps, i, "__restrict__");
+}
+
+static void sig_append_range(Parser *ps, Str *sig, int start, int end)
+{
+    int i;
+
+    for (i = start; i <= end && i < ps->n; i++) {
+        int len;
+        if (i < 0 || ps->t[i].len <= 0 || sig->len >= 190)
+            continue;
+        if (sig->len > 0)
+            str_putc(sig, ' ');
+        len = ps->t[i].len;
+        if (sig->len + (size_t)len > 190)
+            len = (int)(190 - sig->len);
+        if (len > 0)
+            str_append(sig, ps->src + ps->t[i].start, (size_t)len);
+    }
+}
+
+static void variable_segment(Parser *ps, int seg, int end,
+                             int base_start, int base_end,
+                             bool first_seg, bool aggregate_tail)
+{
+    int limit = first_top_level_equal(ps, seg, end);
+    int name;
+    Str sig;
+
+    if (limit < 0)
+        limit = end;
     if (limit <= seg)
         return;
-    q = limit - 1;
-    if (q >= seg && tok_is(ps, q, ']')) {
-        while (q >= seg && !tok_is(ps, q, '['))
-            q--;
-        q--;
+    name = last_ident_before(ps, seg, limit);
+    if (name < 0)
+        return;
+    if (first_seg && !aggregate_tail) {
+        /* The first declarator keeps its original token range, including
+         * pointer stars before the name. */
+        if (name == seg)
+            return;
+        add_symbol(ps, SYM_VARIABLE, name, base_start, name,
+                   ps->t[name].line);
+        return;
     }
-    while (q >= seg && !tok_ident(ps, q))
-        q--;
-    if (q < seg)
+    if (base_end < base_start)
         return;
-    /* The first segment needs a type before the declared name. */
-    if (first_seg && q == seg)
-        return;
-    name = q;
-    add_symbol(ps, SYM_VARIABLE, name, seg, limit - 1, ps->t[name].line);
+    str_init(&sig);
+    sig_append_range(ps, &sig, base_start, base_end);
+    sig_append_range(ps, &sig, seg, name);
+    if (sig.len == 0)
+        str_putc(&sig, '?');
+    add_symbol_raw(ps, SYM_VARIABLE, name, sig.data, ps->t[name].line);
+    str_free(&sig);
 }
 
 static void member_segment(Parser *ps, int seg, int end, bool first_seg)
@@ -1030,17 +1151,36 @@ static void parse_variables(Parser *ps)
 {
     int i;
     int stmt = 0;
+
     for (i = 0; i < ps->n; i++) {
         int start;
         int end;
-        int j;
+        int k;
 
         if (tok_kind(ps, i, TK_PREPROC)) {
             stmt = i + 1;
             continue;
         }
         if (tok_is(ps, i, '}') && ps->depth[i] == 1) {
-            stmt = i + 1;
+            int open = ps->match[i];
+            int scope = open >= 0 ? ps->brace_scope[open] : 0;
+            bool aggregate = scope == SYM_STRUCT || scope == SYM_UNION ||
+                             scope == SYM_ENUM || scope == SYM_CLASS;
+            bool initializer = false;
+            if (!aggregate && open >= 0) {
+                int q;
+                for (q = open - 1; q >= stmt; q--) {
+                    if (tok_is(ps, q, '=')) {
+                        initializer = true;
+                        break;
+                    }
+                    if (tok_is(ps, q, ';') || tok_is(ps, q, '{') ||
+                        tok_is(ps, q, '}'))
+                        break;
+                }
+            }
+            if (!aggregate && !initializer)
+                stmt = i + 1;
             continue;
         }
         if (!tok_is(ps, i, ';') || ps->depth[i] != 0)
@@ -1054,26 +1194,106 @@ static void parse_variables(Parser *ps)
         if (tok_text(ps, start, "typedef") || tok_text(ps, start, "using") ||
             tok_text(ps, start, "template") ||
             tok_text(ps, start, "namespace") ||
-            tok_text(ps, start, "static_assert") ||
-            tok_text(ps, start, "struct") || tok_text(ps, start, "union") ||
-            tok_text(ps, start, "enum") || tok_text(ps, start, "class"))
+            tok_text(ps, start, "static_assert"))
+            continue;
+        if (has_call_before_equal(ps, start, end))
             continue;
 
-        for (j = start; j < end; j++) {
-            if (tok_is(ps, j, '(') || tok_is(ps, j, ')') ||
-                tok_is(ps, j, '{') || tok_is(ps, j, '}'))
-                break;
-        }
-        if (j < end)
-            continue;
+        {
+            bool aggregate_stmt = tok_text(ps, start, "struct") ||
+                                  tok_text(ps, start, "union") ||
+                                  tok_text(ps, start, "enum") ||
+                                  tok_text(ps, start, "class");
+            int body_open = -1;
+            int body_close = -1;
+            int decl_start = start;
+            int base_end = -1;
 
-        j = start;
-        while (j <= end) {
-            int seg = j;
-            while (j < end && !tok_is(ps, j, ','))
-                j++;
-            variable_segment(ps, seg, j, seg == start);
-            j++;
+            if (aggregate_stmt) {
+                for (k = start; k < end; k++) {
+                    int scope;
+                    if (!tok_is(ps, k, '{'))
+                        continue;
+                    scope = ps->brace_scope[k];
+                    if (scope == SYM_STRUCT || scope == SYM_UNION ||
+                        scope == SYM_ENUM || scope == SYM_CLASS) {
+                        body_open = k;
+                        break;
+                    }
+                }
+                if (body_open >= 0) {
+                    body_close = ps->match[body_open];
+                    if (body_close < 0 || body_close >= end)
+                        continue;
+                    base_end = body_open - 1;
+                    decl_start = body_close + 1;
+                    if (decl_start >= end)
+                        continue;
+                } else {
+                    int ident_count = 0;
+                    for (k = start + 1; k < end; k++) {
+                        if (tok_ident(ps, k))
+                            ident_count++;
+                    }
+                    /* struct Foo; is a forward declaration, not a variable. */
+                    if (ident_count < 2)
+                        continue;
+                }
+            }
+
+            if (base_end < 0) {
+                int eq = first_top_level_equal(ps, decl_start, end);
+                int limit = eq >= 0 ? eq : end;
+                int comma = first_top_level_comma(ps, decl_start, limit);
+                int first_name;
+                if (comma >= 0)
+                    limit = comma;
+                first_name = last_ident_before(ps, decl_start, limit);
+                if (first_name < 0)
+                    continue;
+                if (first_name == decl_start && !aggregate_stmt)
+                    continue;
+                base_end = first_name - 1;
+                while (base_end >= start && type_suffix_token(ps, base_end))
+                    base_end--;
+                if (base_end < start)
+                    continue;
+            }
+
+            {
+                int seg = decl_start;
+                int paren = 0;
+                int brack = 0;
+                int brace = 0;
+                bool first = true;
+                for (k = decl_start; k <= end; k++) {
+                    bool split = k == end;
+                    if (!split) {
+                        if (tok_is(ps, k, '(')) {
+                            paren++;
+                        } else if (tok_is(ps, k, ')') && paren > 0) {
+                            paren--;
+                        } else if (tok_is(ps, k, '[')) {
+                            brack++;
+                        } else if (tok_is(ps, k, ']') && brack > 0) {
+                            brack--;
+                        } else if (tok_is(ps, k, '{')) {
+                            brace++;
+                        } else if (tok_is(ps, k, '}') && brace > 0) {
+                            brace--;
+                        } else if (tok_is(ps, k, ',') && paren == 0 &&
+                                   brack == 0 && brace == 0) {
+                            split = true;
+                        }
+                    }
+                    if (split) {
+                        variable_segment(ps, seg, k, start, base_end, first,
+                                         body_open >= 0);
+                        first = false;
+                        seg = k + 1;
+                    }
+                }
+            }
         }
     }
 }
