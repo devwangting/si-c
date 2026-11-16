@@ -49,6 +49,18 @@ typedef struct {
     int sym_count;
 } ProjectFile;
 
+typedef struct {
+    char *name;
+    char *type;
+    char *signature;
+} ProjectMember;
+
+typedef struct {
+    ProjectMember *items;
+    size_t count;
+    size_t cap;
+} ProjectMemberList;
+
 typedef struct CallGraph CallGraph;
 
 typedef struct {
@@ -115,6 +127,13 @@ bool project_caller_tree(Project *p, int symbol_index, LocationList *out,
 /* Return false to cancel indexing (for example when the user presses Esc). */
 typedef bool (*ProjectProgress)(void *ud, size_t files, size_t symbols,
                                 const char *path);
+
+void project_member_list_init(ProjectMemberList *l);
+void project_member_list_free(ProjectMemberList *l);
+bool project_type_aggregate_key(const char *type_text,
+                                char *out, size_t out_size);
+bool project_aggregate_members(Project *p, const char *key,
+                               ProjectMemberList *out);
 
 bool project_load(Project *p, const char *root, ProjectProgress progress,
                   void *ud, char **err);

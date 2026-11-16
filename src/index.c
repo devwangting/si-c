@@ -1363,6 +1363,712 @@ static void parse_source(Project *p, int file_index, const char *src, int len)
 }
 
 /* ------------------------------------------------------------------ */
+/* Aggregate members (for editor completion)                           */
+/* ------------------------------------------------------------------ */
+
+void project_member_list_init(ProjectMemberList *l)
+{
+    l->items = NULL;
+    l->count = 0;
+    l->cap = 0;
+}
+
+void project_member_list_free(ProjectMemberList *l)
+{
+    size_t i;
+    for (i = 0; i < l->count; i++) {
+        free(l->items[i].name);
+        free(l->items[i].type);
+        free(l->items[i].signature);
+    }
+    free(l->items);
+    l->items = NULL;
+    l->count = 0;
+    l->cap = 0;
+}
+
+static void member_list_add(ProjectMemberList *l, const char *name,
+                            const char *type, const char *signature)
+{
+    size_t i;
+    ProjectMember *m;
+
+    if (!name || !*name)
+        return;
+    for (i = 0; i < l->count; i++) {
+        if (strcmp(l->items[i].name, name) == 0)
+            return;
+    }
+    if (l->count == l->cap) {
+        l->cap = l->cap ? l->cap * 2 : 16;
+        l->items = xrealloc(l->items, l->cap * sizeof(*l->items));
+    }
+    m = &l->items[l->count++];
+    m->name = xstrdup(name);
+    m->type = xstrdup(type ? type : "");
+    m->signature = xstrdup(signature ? signature : name);
+}
+
+static bool type_word_qualifier(const char *s, size_t n)
+{
+    static const char *const words[] = {
+        "const", "volatile", "static", "extern", "register", "auto",
+        "restrict", "inline", "_Atomic", "mutable", "typename",
+        "__restrict", "__restrict__"
+    };
+    size_t i;
+    for (i = 0; i < SI_ARRAY_LEN(words); i++) {
+        if (strlen(words[i]) == n && memcmp(words[i], s, n) == 0)
+            return true;
+    }
+    return false;
+}
+
+static bool type_word_builtin(const char *s, size_t n)
+{
+    static const char *const words[] = {
+        "void", "char", "short", "int", "long", "float", "double",
+        "signed", "unsigned", "_Bool", "bool", "size_t", "ssize_t",
+        "wchar_t", "ptrdiff_t", "intptr_t", "uintptr_t", "intmax_t",
+        "uintmax_t", "int8_t", "int16_t", "int32_t", "int64_t",
+        "uint8_t", "uint16_t", "uint32_t", "uint64_t", "off_t",
+        "time_t", "clock_t", "FILE", "DIR", "pid_t", "mode_t", "uid_t",
+        "gid_t", "socklen_t", "va_list", "stdint", "uint", "ulong",
+        "uchar", "ushort"
+    };
+    size_t i;
+    for (i = 0; i < SI_ARRAY_LEN(words); i++) {
+        if (strlen(words[i]) == n && memcmp(words[i], s, n) == 0)
+            return true;
+    }
+    return false;
+}
+
+static bool type_word_aggregate_keyword(const char *s, size_t n)
+{
+    static const char *const words[] = {
+        "struct", "union", "enum", "class"
+    };
+    size_t i;
+    for (i = 0; i < SI_ARRAY_LEN(words); i++) {
+        if (strlen(words[i]) == n && memcmp(words[i], s, n) == 0)
+            return true;
+    }
+    return false;
+}
+
+bool project_type_aggregate_key(const char *type_text,
+                                char *out, size_t out_size)
+{
+    const char *p;
+    const char *key = NULL;
+    size_t key_len = 0;
+
+    if (!type_text || !out || out_size == 0)
+        return false;
+    for (p = type_text; *p; p++) {
+        if (*p == '{' || *p == '(')
+            return false;
+    }
+    p = type_text;
+    while (*p) {
+        const char *start;
+        size_t n;
+        if (!isalpha((unsigned char)*p) && *p != '_') {
+            p++;
+            continue;
+        }
+        start = p;
+        p++;
+        while (isalnum((unsigned char)*p) || *p == '_')
+            p++;
+        n = (size_t)(p - start);
+        if (type_word_qualifier(start, n) ||
+            type_word_builtin(start, n) ||
+            type_word_aggregate_keyword(start, n))
+            continue;
+        key = start;
+        key_len = n;
+    }
+    if (!key || key_len == 0)
+        return false;
+    if (key_len >= out_size)
+        key_len = out_size - 1;
+    memcpy(out, key, key_len);
+    out[key_len] = '\0';
+    return true;
+}
+
+static bool tok_is_punct(const char *src, const Tok *t, char c)
+{
+    return t->kind == TK_PUNCT && t->len == 1 && src[t->start] == c;
+}
+
+static bool tok_is_text(const char *src, const Tok *t, const char *text)
+{
+    size_t n = strlen(text);
+    return (size_t)t->len == n && memcmp(src + t->start, text, n) == 0;
+}
+
+static bool tok_is_ident(const Tok *t)
+{
+    return t->kind == TK_IDENT;
+}
+
+static int tok_matching_brace(const char *src, const Tok *t, int n, int open)
+{
+    int i;
+    int depth = 0;
+    for (i = open; i < n; i++) {
+        if (tok_is_punct(src, &t[i], '{'))
+            depth++;
+        else if (tok_is_punct(src, &t[i], '}')) {
+            depth--;
+            if (depth == 0)
+                return i;
+        }
+    }
+    return -1;
+}
+
+static int tok_find_symbol(const char *src, const Tok *t, int n,
+                           const Symbol *s)
+{
+    int i;
+    for (i = 0; i < n; i++) {
+        if (t[i].line != s->line || t[i].col != s->col)
+            continue;
+        if (tok_is_text(src, &t[i], s->name))
+            return i;
+    }
+    return -1;
+}
+
+static int *tok_depths(const char *src, const Tok *t, int n)
+{
+    int *depth = xmalloc((size_t)n * sizeof(*depth));
+    int d = 0;
+    int i;
+    for (i = 0; i < n; i++) {
+        depth[i] = d;
+        if (tok_is_punct(src, &t[i], '{'))
+            d++;
+        else if (tok_is_punct(src, &t[i], '}') && d > 0)
+            d--;
+    }
+    return depth;
+}
+
+static char *tok_range_text(const char *src, const Tok *t,
+                            int start, int end)
+{
+    Str s;
+    int i;
+
+    str_init(&s);
+    for (i = start; i <= end; i++) {
+        if (i < 0 || t[i].len <= 0)
+            continue;
+        if (s.len > 0)
+            str_putc(&s, ' ');
+        str_append(&s, src + t[i].start, (size_t)t[i].len);
+        if (s.len >= 190)
+            break;
+    }
+    if (s.len == 0) {
+        str_free(&s);
+        return xstrdup("");
+    }
+    return s.data;
+}
+
+static bool member_type_suffix(const char *src, const Tok *t, int i)
+{
+    return tok_is_punct(src, &t[i], '*') || tok_is_punct(src, &t[i], '&') ||
+           tok_is_text(src, &t[i], "const") ||
+           tok_is_text(src, &t[i], "volatile") ||
+           tok_is_text(src, &t[i], "restrict") ||
+           tok_is_text(src, &t[i], "_Atomic") ||
+           tok_is_text(src, &t[i], "__restrict") ||
+           tok_is_text(src, &t[i], "__restrict__");
+}
+
+static int member_name_index(const char *src, const Tok *t, int start, int end)
+{
+    int i;
+    int cut = end;
+    int paren = 0;
+    int brack = 0;
+    int brace = 0;
+
+    for (i = start; i < end; i++) {
+        if (tok_is_punct(src, &t[i], '(')) {
+            paren++;
+        } else if (tok_is_punct(src, &t[i], ')') && paren > 0) {
+            paren--;
+        } else if (tok_is_punct(src, &t[i], '[')) {
+            brack++;
+        } else if (tok_is_punct(src, &t[i], ']') && brack > 0) {
+            brack--;
+        } else if (tok_is_punct(src, &t[i], '{')) {
+            brace++;
+        } else if (tok_is_punct(src, &t[i], '}') && brace > 0) {
+            brace--;
+        } else if (paren == 0 && brack == 0 && brace == 0 &&
+                   (tok_is_punct(src, &t[i], '=') ||
+                    tok_is_punct(src, &t[i], ':'))) {
+            cut = i;
+            break;
+        }
+    }
+    i = cut - 1;
+    while (i >= start && !tok_is_ident(&t[i]))
+        i--;
+    return i >= start ? i : -1;
+}
+
+static void member_segment_add(const char *src, const Tok *t,
+                               ProjectMemberList *out, int base_start,
+                               int base_end, int seg, int end, bool first)
+{
+    int name = member_name_index(src, t, seg, end);
+    char *type;
+    char *signature;
+    char *name_text;
+
+    if (name < 0)
+        return;
+    if (first) {
+        type = tok_range_text(src, t, base_start, name - 1);
+    } else {
+        Str s;
+        char *base = tok_range_text(src, t, base_start, base_end);
+        char *prefix = tok_range_text(src, t, seg, name - 1);
+        str_init(&s);
+        if (base[0])
+            str_puts(&s, base);
+        if (prefix[0]) {
+            if (s.len > 0)
+                str_putc(&s, ' ');
+            str_puts(&s, prefix);
+        }
+        free(base);
+        free(prefix);
+        if (s.len > 0) {
+            type = s.data;
+        } else {
+            str_free(&s);
+            type = xstrdup("");
+        }
+    }
+    signature = tok_range_text(src, t, seg, name);
+    name_text = tok_range_text(src, t, name, name);
+    member_list_add(out, name_text, type, signature);
+    free(name_text);
+    free(type);
+    free(signature);
+}
+
+static void process_member_statement(const char *src, const Tok *t, int n,
+                                     int start, int end,
+                                     ProjectMemberList *out)
+{
+    int i;
+    int paren = 0;
+    int brack = 0;
+    int brace = 0;
+    int eq = -1;
+    int body_open = -1;
+    int lparen = -1;
+    int base_end;
+    int first_end;
+    int first_name;
+    int seg;
+
+    if (start >= end)
+        return;
+    if (tok_is_ident(&t[start]) &&
+        (tok_is_text(src, &t[start], "public") ||
+         tok_is_text(src, &t[start], "private") ||
+         tok_is_text(src, &t[start], "protected")) &&
+        start + 1 < end && tok_is_punct(src, &t[start + 1], ':')) {
+        start += 2;
+    }
+    if (start >= end)
+        return;
+    if (tok_is_text(src, &t[start], "typedef") ||
+        tok_is_text(src, &t[start], "using") ||
+        tok_is_text(src, &t[start], "friend") ||
+        tok_is_text(src, &t[start], "template") ||
+        tok_is_text(src, &t[start], "static"))
+        return;
+
+    for (i = start; i < end; i++) {
+        if (tok_is_punct(src, &t[i], '(')) {
+            paren++;
+        } else if (tok_is_punct(src, &t[i], ')') && paren > 0) {
+            paren--;
+        } else if (tok_is_punct(src, &t[i], '[')) {
+            brack++;
+        } else if (tok_is_punct(src, &t[i], ']') && brack > 0) {
+            brack--;
+        } else if (tok_is_punct(src, &t[i], '{')) {
+            if (paren == 0 && brack == 0 && brace == 0 && body_open < 0)
+                body_open = i;
+            brace++;
+        } else if (tok_is_punct(src, &t[i], '}') && brace > 0) {
+            brace--;
+        } else if (paren == 0 && brack == 0 && brace == 0 &&
+                   tok_is_punct(src, &t[i], '=') && eq < 0) {
+            eq = i;
+        }
+    }
+
+    if (body_open >= 0 && (eq < 0 || eq > body_open)) {
+        int close = tok_matching_brace(src, t, n, body_open);
+        int q;
+        if (close < 0 || close >= end)
+            return;
+        seg = close + 1;
+        for (q = close + 1; q <= end; q++) {
+            if (q == end || tok_is_punct(src, &t[q], ',') ||
+                tok_is_punct(src, &t[q], ';')) {
+                int name = member_name_index(src, t, seg, q);
+                if (name >= 0) {
+                    char *name_text = tok_range_text(src, t, name, name);
+                    char *signature =
+                        tok_range_text(src, t, seg, name);
+                    member_list_add(out, name_text, "", signature);
+                    free(signature);
+                    free(name_text);
+                }
+                seg = q + 1;
+            }
+        }
+        return;
+    }
+
+    for (i = start; i < end; i++) {
+        if (tok_is_punct(src, &t[i], '(')) {
+            lparen = i;
+            break;
+        }
+    }
+    if (lparen >= 0 && (eq < 0 || lparen < eq)) {
+        if (lparen + 2 < end && tok_is_punct(src, &t[lparen + 1], '*') &&
+            tok_is_ident(&t[lparen + 2])) {
+            char *name_text = tok_range_text(src, t, lparen + 2, lparen + 2);
+            char *signature = tok_range_text(src, t, start, end - 1);
+            member_list_add(out, name_text, "", signature);
+            free(signature);
+            free(name_text);
+        }
+        return;
+    }
+
+    first_end = end;
+    for (i = start; i < end; i++) {
+        if (tok_is_punct(src, &t[i], '(')) {
+            paren++;
+        } else if (tok_is_punct(src, &t[i], ')') && paren > 0) {
+            paren--;
+        } else if (tok_is_punct(src, &t[i], '[')) {
+            brack++;
+        } else if (tok_is_punct(src, &t[i], ']') && brack > 0) {
+            brack--;
+        } else if (tok_is_punct(src, &t[i], '{')) {
+            brace++;
+        } else if (tok_is_punct(src, &t[i], '}') && brace > 0) {
+            brace--;
+        } else if (paren == 0 && brack == 0 && brace == 0 &&
+                   tok_is_punct(src, &t[i], ',')) {
+            first_end = i;
+            break;
+        }
+    }
+    first_name = member_name_index(src, t, start, first_end);
+    if (first_name < 0)
+        return;
+    base_end = first_name - 1;
+    while (base_end >= start && member_type_suffix(src, t, base_end))
+        base_end--;
+
+    seg = start;
+    paren = brack = brace = 0;
+    for (i = start; i <= end; i++) {
+        bool split = i == end;
+        if (!split) {
+            if (tok_is_punct(src, &t[i], '(')) {
+                paren++;
+            } else if (tok_is_punct(src, &t[i], ')') && paren > 0) {
+                paren--;
+            } else if (tok_is_punct(src, &t[i], '[')) {
+                brack++;
+            } else if (tok_is_punct(src, &t[i], ']') && brack > 0) {
+                brack--;
+            } else if (tok_is_punct(src, &t[i], '{')) {
+                brace++;
+            } else if (tok_is_punct(src, &t[i], '}') && brace > 0) {
+                brace--;
+            } else if (paren == 0 && brack == 0 && brace == 0 &&
+                       tok_is_punct(src, &t[i], ',')) {
+                split = true;
+            }
+        }
+        if (split) {
+            member_segment_add(src, t, out, start, base_end, seg, i,
+                               seg == start);
+            seg = i + 1;
+        }
+    }
+}
+
+static void collect_members(const char *src, const Tok *t, int n,
+                            int open, int close, ProjectMemberList *out)
+{
+    int i = open + 1;
+    int stmt_start = open + 1;
+    int paren = 0;
+    int brack = 0;
+    int brace = 0;
+
+    while (i < close) {
+        if (tok_is_punct(src, &t[i], '{') && brace == 0) {
+            int q;
+            bool eq_before = false;
+            bool paren_before = false;
+            int end = tok_matching_brace(src, t, n, i);
+            for (q = stmt_start; q < i; q++) {
+                if (tok_is_punct(src, &t[q], '='))
+                    eq_before = true;
+                if (tok_is_punct(src, &t[q], '('))
+                    paren_before = true;
+            }
+            if (paren_before && !eq_before) {
+                i = end >= 0 ? end + 1 : close;
+                stmt_start = i;
+                continue;
+            }
+        }
+        if (tok_is_punct(src, &t[i], '(')) {
+            paren++;
+        } else if (tok_is_punct(src, &t[i], ')') && paren > 0) {
+            paren--;
+        } else if (tok_is_punct(src, &t[i], '[')) {
+            brack++;
+        } else if (tok_is_punct(src, &t[i], ']') && brack > 0) {
+            brack--;
+        } else if (tok_is_punct(src, &t[i], '{')) {
+            brace++;
+        } else if (tok_is_punct(src, &t[i], '}') && brace > 0) {
+            brace--;
+        } else if (paren == 0 && brack == 0 && brace == 0 &&
+                   tok_is_punct(src, &t[i], ';')) {
+            process_member_statement(src, t, n, stmt_start, i, out);
+            stmt_start = i + 1;
+        }
+        i++;
+    }
+}
+
+static char *read_project_source(Project *p, int file_index, int *len_out)
+{
+    char *text = NULL;
+    char *err = NULL;
+    size_t len = 0;
+
+    if (file_index < 0 || (size_t)file_index >= p->file_count)
+        return NULL;
+    if (!file_read_all(p->files[file_index].path, SI_MAX_FILE_SIZE,
+                       &text, &len, &err)) {
+        free(err);
+        return NULL;
+    }
+    free(err);
+    *len_out = (int)len;
+    return text;
+}
+
+static bool collect_symbol_body(Project *p, const Symbol *s,
+                                ProjectMemberList *out)
+{
+    char *src;
+    int len = 0;
+    Lexer lx;
+    int sym_tok;
+    int open = -1;
+    int close;
+    int i;
+
+    src = read_project_source(p, s->file_index, &len);
+    if (!src)
+        return false;
+    lex_source(src, len, &lx);
+    sym_tok = tok_find_symbol(src, lx.toks, lx.count, s);
+    if (sym_tok < 0) {
+        lex_free(&lx);
+        free(src);
+        return false;
+    }
+    for (i = sym_tok + 1; i < lx.count; i++) {
+        if (tok_is_punct(src, &lx.toks[i], ';'))
+            break;
+        if (tok_is_punct(src, &lx.toks[i], '}'))
+            break;
+        if (tok_is_punct(src, &lx.toks[i], '{')) {
+            open = i;
+            break;
+        }
+    }
+    if (open < 0) {
+        lex_free(&lx);
+        free(src);
+        return false;
+    }
+    close = tok_matching_brace(src, lx.toks, lx.count, open);
+    if (close < 0) {
+        lex_free(&lx);
+        free(src);
+        return false;
+    }
+    collect_members(src, lx.toks, lx.count, open, close, out);
+    lex_free(&lx);
+    free(src);
+    return true;
+}
+
+static bool aggregate_members_internal(Project *p, const char *key,
+                                       ProjectMemberList *out, int depth);
+
+static bool collect_typedef_body(Project *p, const Symbol *s,
+                                 ProjectMemberList *out, int depth)
+{
+    char *src;
+    int len = 0;
+    Lexer lx;
+    int *tdepth;
+    int alias;
+    int adepth;
+    int start = -1;
+    int end = -1;
+    int i;
+    bool found = false;
+
+    src = read_project_source(p, s->file_index, &len);
+    if (!src)
+        return false;
+    lex_source(src, len, &lx);
+    alias = tok_find_symbol(src, lx.toks, lx.count, s);
+    if (alias < 0) {
+        lex_free(&lx);
+        free(src);
+        return false;
+    }
+    tdepth = tok_depths(src, lx.toks, lx.count);
+    adepth = tdepth[alias];
+    for (i = alias - 1; i >= 0; i--) {
+        if (tdepth[i] < adepth)
+            break;
+        if (tdepth[i] == adepth && tok_is_punct(src, &lx.toks[i], ';'))
+            break;
+        if (tdepth[i] == adepth &&
+            tok_is_text(src, &lx.toks[i], "typedef")) {
+            start = i;
+            break;
+        }
+    }
+    if (start >= 0) {
+        for (i = alias + 1; i < lx.count; i++) {
+            if (tdepth[i] < adepth)
+                break;
+            if (tdepth[i] == adepth && tok_is_punct(src, &lx.toks[i], ';')) {
+                end = i;
+                break;
+            }
+        }
+    }
+    if (start >= 0 && end > start) {
+        for (i = start + 1; i < alias; i++) {
+            int open;
+            int close;
+            int j;
+            if (!(tok_is_text(src, &lx.toks[i], "struct") ||
+                  tok_is_text(src, &lx.toks[i], "union") ||
+                  tok_is_text(src, &lx.toks[i], "class")))
+                continue;
+            j = i + 1;
+            if (j < alias && tok_is_ident(&lx.toks[j]))
+                j++;
+            if (j >= alias || !tok_is_punct(src, &lx.toks[j], '{'))
+                continue;
+            open = j;
+            close = tok_matching_brace(src, lx.toks, lx.count, open);
+            if (close < 0 || close > alias)
+                continue;
+            collect_members(src, lx.toks, lx.count, open, close, out);
+            found = true;
+            break;
+        }
+        if (!found) {
+            for (i = alias - 1; i > start; i--) {
+                const char *text;
+                size_t n;
+                char *type;
+                if (!tok_is_ident(&lx.toks[i]))
+                    continue;
+                text = src + lx.toks[i].start;
+                n = (size_t)lx.toks[i].len;
+                if (type_word_qualifier(text, n) ||
+                    type_word_aggregate_keyword(text, n) ||
+                    type_word_builtin(text, n))
+                    continue;
+                type = xstrndup(text, n);
+                found = aggregate_members_internal(p, type, out,
+                                                   depth + 1);
+                free(type);
+                break;
+            }
+        }
+    }
+    free(tdepth);
+    lex_free(&lx);
+    free(src);
+    return found;
+}
+
+static bool aggregate_members_internal(Project *p, const char *key,
+                                       ProjectMemberList *out, int depth)
+{
+    IntList ids;
+    size_t i;
+    bool found = false;
+
+    if (depth > 8 || !key || !*key)
+        return false;
+    intlist_init(&ids);
+    project_find_symbols(p, key, &ids);
+    for (i = 0; i < ids.count; i++) {
+        Symbol *s = &p->syms[ids.items[i]];
+        if (s->kind == SYM_STRUCT || s->kind == SYM_UNION ||
+            s->kind == SYM_CLASS) {
+            if (collect_symbol_body(p, s, out))
+                found = true;
+        } else if (s->kind == SYM_TYPEDEF) {
+            if (collect_typedef_body(p, s, out, depth))
+                found = true;
+        }
+    }
+    intlist_free(&ids);
+    return found;
+}
+
+bool project_aggregate_members(Project *p, const char *key,
+                               ProjectMemberList *out)
+{
+    return aggregate_members_internal(p, key, out, 0);
+}
+
+/* ------------------------------------------------------------------ */
 /* Project scan                                                        */
 /* ------------------------------------------------------------------ */
 

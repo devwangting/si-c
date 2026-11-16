@@ -34,6 +34,8 @@ static void check(bool cond, const char *what)
     }
 }
 
+static ProjectMember *find_member(ProjectMemberList *l, const char *name);
+
 static void check_variable(Project *p, const char *name,
                            const char *type_fragment)
 {
@@ -293,6 +295,51 @@ static void test_project(const char *root)
     check(ids.count == 0, "forward declaration is not a variable");
     intlist_free(&ids);
 
+    {
+        ProjectMemberList members;
+        ProjectMember *m;
+        project_member_list_init(&members);
+        check(project_aggregate_members(&p, "Point", &members),
+              "Point members found");
+        check(members.count == 2, "Point has two members");
+        m = find_member(&members, "x");
+        check(m != NULL && strcmp(m->type, "int") == 0, "Point.x type");
+        m = find_member(&members, "y");
+        check(m != NULL && strcmp(m->type, "int") == 0, "Point.y type");
+        project_member_list_free(&members);
+
+        project_member_list_init(&members);
+        check(project_aggregate_members(&p, "CompletionAnon", &members),
+              "anonymous typedef members found");
+        check(members.count == 2, "anonymous typedef has alpha/beta");
+        project_member_list_free(&members);
+
+        project_member_list_init(&members);
+        check(project_aggregate_members(&p, "CompletionNode", &members),
+              "CompletionNode members found");
+        check(members.count == 4, "CompletionNode has four members");
+        m = find_member(&members, "pos");
+        check(m != NULL && strcmp(m->type, "Point") == 0,
+              "CompletionNode.pos type");
+        m = find_member(&members, "next");
+        check(m != NULL && strstr(m->type, "CompletionNode") != NULL &&
+              strchr(m->type, '*') != NULL, "CompletionNode.next type");
+        m = find_member(&members, "alpha");
+        check(m != NULL && strcmp(m->type, "int") == 0,
+              "CompletionNode.alpha type");
+        project_member_list_free(&members);
+
+        project_member_list_init(&members);
+        check(!project_aggregate_members(&p, "CompletionForward", &members),
+              "forward declaration has no members");
+        project_member_list_free(&members);
+
+        project_member_list_init(&members);
+        check(!project_aggregate_members(&p, "NoSuchType", &members),
+              "unknown aggregate has no members");
+        project_member_list_free(&members);
+    }
+
     for (i = 0; i < p.sym_count; i++)
         check(p.syms[i].name != NULL && p.syms[i].signature != NULL,
               "symbol strings allocated");
@@ -442,6 +489,36 @@ static void test_state(void)
 }
 #endif
 
+static ProjectMember *find_member(ProjectMemberList *l, const char *name)
+{
+    size_t i;
+    for (i = 0; i < l->count; i++) {
+        if (strcmp(l->items[i].name, name) == 0)
+            return &l->items[i];
+    }
+    return NULL;
+}
+
+static void test_type_keys(void)
+{
+    char key[256];
+
+    check(project_type_aggregate_key("const struct Point *", key,
+                                     sizeof(key)) &&
+          strcmp(key, "Point") == 0, "type key struct pointer");
+    check(project_type_aggregate_key("struct CompletionNode *", key,
+                                     sizeof(key)) &&
+          strcmp(key, "CompletionNode") == 0, "type key typedef pointer");
+    check(project_type_aggregate_key("Point[4]", key, sizeof(key)) &&
+          strcmp(key, "Point") == 0, "type key array");
+    check(!project_type_aggregate_key("unsigned long", key, sizeof(key)),
+          "builtin type has no aggregate key");
+    check(!project_type_aggregate_key("struct { int x; }", key, sizeof(key)),
+          "anonymous aggregate has no key");
+    check(!project_type_aggregate_key("void (*)(int)", key, sizeof(key)),
+          "function pointer has no aggregate key");
+}
+
 static void test_syntax_lists(void)
 {
     bool has_return = false;
@@ -473,6 +550,7 @@ int main(int argc, char **argv)
     test_names();
     test_syntax();
     test_syntax_lists();
+    test_type_keys();
 #ifndef _WIN32
     test_state();
 #endif
