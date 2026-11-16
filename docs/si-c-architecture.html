@@ -987,7 +987,18 @@ static bool editor_offset_at(App *a, int x, int y, int *offset)
     *offset = (int)buf_offset_at_visual(b, line, vcol);
     return true;
 }
-</code></pre></div></section>
+</code></pre></div>
+<h3>6.4 补全浮层</h3>
+<p>补全候选由 <code>app_completion_update()</code> 维护；渲染阶段只读取最近一次状态并绘制。<code>draw_completion()</code> 调用 <code>app_completion_geometry()</code> 计算光标旁的位置，再按可视行绘制名字和右侧类型/签名。</p>
+<div class="codecard"><div class="codehead">补全浮层的几何与绘制</div><pre><code>
+if (app_completion_geometry(a, &amp;x, &amp;y, &amp;w, &amp;h, &amp;first, &amp;rows)) {
+    for (每个可视行 i) {
+        idx = first + i;
+        画边框/名字列/详情列;
+        选中行用 accent_bg + selection_fg;
+    }
+}
+</code></pre><p class="codenote">候选总数不截断；屏幕放不下时只减少可视行并滚动。浮层被夹在内容区内，不覆盖提示行和状态行。</p></div></section>
 <section id="index">
 <h2>7. 索引与解析：index.c</h2>
 <p>索引器是“启发式 C 解析器”，不是完整 AST。它的目标是给编辑器提供符号、引用和调用关系，而不是编译代码。</p>
@@ -1102,7 +1113,12 @@ bool app_local_in_scope(App *a, int line,
     }
     return false;
 }
-</code></pre><p class="codenote">渲染时先查局部变量，再查全局变量，所以同名时局部变量胜出。</p></div></section>
+</code></pre><p class="codenote">渲染时先查局部变量，再查全局变量，所以同名时局部变量胜出。</p></div>
+<h3>7.5 补全成员与全局变量</h3>
+<p><code>project_type_aggregate_key()</code> 把 <code>const struct Point *</code>、<code>Point[4]</code> 这类类型文本归一成 <code>Point</code>；<code>project_aggregate_members()</code> 按需读取聚合定义所在文件，用词法 token 找到 <code>{...}</code> 并收集第一层数据成员，供 <code>obj.</code> / <code>obj-&gt;</code> 和链式访问使用。</p>
+<p><code>parse_variables()</code> 同时补齐了常见全局变量形式：<code>struct Point origin;</code>、<code>Point world = {1, 2};</code>、<code>struct Point *ptr;</code>、顶层多声明符和数组。每个变量符号的签名以完整类型开头，成员解析不必再猜前一个声明符。</p>
+</section>
+
 <section id="features">
 <h2>8. 功能模块：从核心能力到编辑器体验</h2>
 <h3>8.1 文件大纲</h3>
@@ -1113,9 +1129,11 @@ bool app_local_in_scope(App *a, int line,
 <p>点击函数名时，如果项目里存在多个同名函数定义，打开 <code>SELECT DEFINITION</code> 选择框。确认后把调用链固定到指定符号；点击调用者时跳到真实调用点。</p>
 <h3>8.4 菜单与项目选择</h3>
 <p>顶端菜单是 <code>app_menu_*</code> + <code>draw_menu()</code>；项目目录选择是 <code>dir_picker_*</code> + <code>draw_dir_picker()</code>。打开项目时浏览目录，新建项目先选父目录再输入名字。</p>
-<h3>8.5 代码整理</h3>
+<h3>8.5 变量补全</h3>
+<p><code>app_completion_update()</code> 在编辑器每次输入字符、退格或删除后运行：判断是否在注释/字符串/预处理行，读取当前前缀，按名字索引收集局部变量、全局变量、函数、宏、类型和关键字；输入 <code>.</code> / <code>-&gt;</code> 时改为解析接收者类型并列出聚合成员。Tab/Enter 接受，Esc 抑制当前词，鼠标单击高亮、双击接受、滚轮滚动。</p>
+<h3>8.6 代码整理</h3>
 <p><code>format_ansi_source()</code> 是内置的 ANSI 风格整理器：4 空格缩进、函数左大括号独占一行、控制语句同行。预处理行和反斜杠续行原样保留，避免宏被破坏。</p>
-<h3>8.6 导航历史</h3>
+<h3>8.7 导航历史</h3>
 <p>每次跳转前 <code>app_push_location()</code> 记录路径、光标、滚动位置；<code>app_go_back()</code>/<code>app_go_forward()</code> 在跳转栈中移动。前进历史为空时回到 <code>home</code>。</p>
 </section>
 
@@ -1168,22 +1186,25 @@ bool app_local_in_scope(App *a, int line,
 <table>
 <tr><th>位置</th><th>函数</th><th>职责</th></tr>
 <tr><td>main.c:155</td><td>main</td><td>命令行解析、批处理、启动 ui_run</td></tr>
-<tr><td>app.c:94</td><td>app_layout</td><td>计算五块面板的行列布局</td></tr>
-<tr><td>app.c:301</td><td>app_refresh_outline</td><td>当前文件符号 → 左侧大纲</td></tr>
-<tr><td>app.c:464</td><td>app_open_file_index</td><td>打开项目文件、刷新视图、重置信息</td></tr>
-<tr><td>app.c:616</td><td>app_go_back</td><td>后退历史</td></tr>
-<tr><td>app.c:642</td><td>app_go_forward</td><td>前进历史；尽头回 home</td></tr>
-<tr><td>app.c:689</td><td>app_ensure_visible</td><td>调整 scroll_line/scroll_col 保证光标可见</td></tr>
-<tr><td>app.c:735</td><td>insert_at_cursor</td><td>插入字符并移动光标</td></tr>
-<tr><td>app.c:809</td><td>move_vertical</td><td>上下移动，保持 goal_col</td></tr>
-<tr><td>app.c:1368</td><td>app_rebuild_locals</td><td>扫描函数体，建立局部变量表</td></tr>
-<tr><td>app.c:1522</td><td>app_update_info</td><td>更新 CODE 面板的符号/定义/代码范围</td></tr>
-<tr><td>app.c:2088</td><td>app_show_context</td><td>构建调用链或同名函数选择</td></tr>
-<tr><td>app.c:2663</td><td>app_change_project</td><td>切换项目，关闭旧 Buffer，重新索引</td></tr>
-<tr><td>app.c:3562</td><td>app_handle_editor_key</td><td>编辑器的按键命令</td></tr>
-<tr><td>app.c:3914</td><td>editor_offset_at</td><td>鼠标坐标 → Buffer 字节偏移</td></tr>
-<tr><td>app.c:4257</td><td>app_handle_key</td><td>事件优先级分发</td></tr>
-<tr><td>app.c:4551</td><td>ui_run</td><td>初始化、主循环、清理</td></tr>
+<tr><td>app.c:140</td><td>app_layout</td><td>计算五块面板的行列布局</td></tr>
+<tr><td>app.c:371</td><td>app_refresh_outline</td><td>当前文件符号 → 左侧大纲</td></tr>
+<tr><td>app.c:542</td><td>app_open_file_index</td><td>打开项目文件、刷新视图、重置信息</td></tr>
+<tr><td>app.c:723</td><td>app_go_back</td><td>后退历史</td></tr>
+<tr><td>app.c:749</td><td>app_go_forward</td><td>前进历史；尽头回 home</td></tr>
+<tr><td>app.c:796</td><td>app_ensure_visible</td><td>调整 scroll_line/scroll_col 保证光标可见</td></tr>
+<tr><td>app.c:842</td><td>insert_at_cursor</td><td>插入字符并移动光标</td></tr>
+<tr><td>app.c:916</td><td>move_vertical</td><td>上下移动，保持 goal_col</td></tr>
+<tr><td>app.c:1761</td><td>app_rebuild_locals</td><td>扫描函数体，建立局部变量表</td></tr>
+<tr><td>app.c:2561</td><td>app_completion_update</td><td>收集并过滤补全候选</td></tr>
+<tr><td>app.c:2637</td><td>app_completion_accept</td><td>替换当前标识符并关闭列表</td></tr>
+<tr><td>app.c:2728</td><td>app_completion_handle_mouse</td><td>补全列表的鼠标命中/双击/滚轮</td></tr>
+<tr><td>app.c:3007</td><td>app_update_info</td><td>更新 CODE 面板的符号/定义/代码范围</td></tr>
+<tr><td>app.c:3700</td><td>app_show_context</td><td>构建调用链或同名函数选择</td></tr>
+<tr><td>app.c:4354</td><td>app_change_project</td><td>切换项目，关闭旧 Buffer，重新索引</td></tr>
+<tr><td>app.c:5453</td><td>app_handle_editor_key</td><td>编辑器的按键命令</td></tr>
+<tr><td>app.c:5811</td><td>editor_offset_at</td><td>鼠标坐标 → Buffer 字节偏移</td></tr>
+<tr><td>app.c:6338</td><td>app_handle_key</td><td>事件优先级分发</td></tr>
+<tr><td>app.c:6813</td><td>ui_run</td><td>初始化、主循环、清理</td></tr>
 <tr><td>text.c:98</td><td>buf_ensure_lines</td><td>重建行起始偏移表</td></tr>
 <tr><td>text.c:170</td><td>buf_line_of_offset</td><td>字节偏移 → 行号（二分）</td></tr>
 <tr><td>text.c:188</td><td>buf_visual_col</td><td>字节偏移 → 显示列</td></tr>
@@ -1193,17 +1214,18 @@ bool app_local_in_scope(App *a, int line,
 <tr><td>text.c:369</td><td>buf_undo</td><td>按组撤销</td></tr>
 <tr><td>term.c:553</td><td>term_init</td><td>raw mode、备用屏幕、鼠标模式</td></tr>
 <tr><td>term.c:654</td><td>term_read_key</td><td>解析键盘/鼠标事件</td></tr>
-<tr><td>render.c:195</td><td>draw_code_range</td><td>普通代码行的 UTF-8/滚动/颜色绘制</td></tr>
-<tr><td>render.c:359</td><td>draw_editor_row</td><td>行号 + 代码</td></tr>
-<tr><td>render.c:1354</td><td>draw_content</td><td>五块面板的内容区绘制</td></tr>
-<tr><td>render.c:1452</td><td>app_render</td><td>整帧 ANSI 生成和输出</td></tr>
-<tr><td>index.c:175</td><td>lex_source</td><td>C 词法切分</td></tr>
-<tr><td>index.c:791</td><td>parse_functions</td><td>函数定义/原型识别</td></tr>
-<tr><td>index.c:1000</td><td>parse_source</td><td>单文件解析入口</td></tr>
-<tr><td>index.c:1192</td><td>project_load</td><td>扫描项目、建立符号索引</td></tr>
-<tr><td>index.c:1553</td><td>build_call_graph</td><td>真实调用关系图</td></tr>
-<tr><td>index.c:1661</td><td>project_caller_tree</td><td>反向调用者树</td></tr>
-<tr><td>index.c:1711</td><td>project_context</td><td>调用者/被调用者/引用数</td></tr>
+<tr><td>render.c:229</td><td>draw_code_range</td><td>普通代码行的 UTF-8/滚动/颜色绘制</td></tr>
+<tr><td>render.c:445</td><td>draw_editor_row</td><td>行号 + 代码</td></tr>
+<tr><td>render.c:2494</td><td>draw_completion</td><td>补全浮层绘制</td></tr>
+<tr><td>render.c:2811</td><td>draw_content</td><td>五块面板的内容区绘制</td></tr>
+<tr><td>render.c:2947</td><td>app_render</td><td>整帧 ANSI 生成和输出</td></tr>
+<tr><td>index.c:193</td><td>lex_source</td><td>C 词法切分</td></tr>
+<tr><td>index.c:828</td><td>parse_functions</td><td>函数定义/原型识别</td></tr>
+<tr><td>index.c:1327</td><td>parse_source</td><td>单文件解析入口</td></tr>
+<tr><td>index.c:2233</td><td>project_load</td><td>扫描项目、建立符号索引</td></tr>
+<tr><td>index.c:2999</td><td>build_call_graph</td><td>真实调用关系图</td></tr>
+<tr><td>index.c:3209</td><td>project_caller_tree</td><td>反向调用者树</td></tr>
+<tr><td>index.c:3260</td><td>project_context</td><td>调用者/被调用者/引用数</td></tr>
 </table>
 </section>
 

@@ -24,13 +24,13 @@
 - Makefile 的 `%.o: %.c` 不跟踪头文件依赖：改过 `.h` 后执行 `make clean && make -j`，否则可能链接旧对象。
 - 新增 `.c` 时必须同时加入 Makefile 的 `SRC`，以及测试所需的 `CORE` / `UI_CORE`，否则主程序或测试会漏符号。
 - 编译选项是 `-std=c11 -Wall -Wextra -Wpedantic`；当前 GCC 下已有少量 `-Wformat-truncation` 警告（`util.c` / `render.c` / `app.c`），目标是不要新增警告。
-- Linux 当前实测：test_core 128、test_keys 26、ui_smoke 155。`test_keys` 的 macOS Option 用例在 `#if defined(__APPLE__)` 内，数量会与本机不同。
+- Linux 当前实测：test_core 194、test_keys 26、ui_smoke 266。`test_keys` 的 macOS Option 用例在 `#if defined(__APPLE__)` 内，数量会与本机不同。
 
 ## 运行时主流程
 
 1. `src/main.c:main()` 解析参数；无路径且交互模式时不解析项目，交给 `ui_run()` 显示最近项目列表；显式路径才解析为项目根；批量模式无路径仍使用 `.`。
 2. `ui_run()`（`src/app.c`）：`term_init()` → `state_load()` 读取 `recent=` 历史 → 有显式根目录才 `project_load_cached()` 并打开初始文件；否则空工作区 + `app_project_picker_open()`。
-3. 主循环：`app_layout()` → 选择项修正 → 编辑器焦点时 `app_sync_callflow()` → `app_render()` → `relations_pending` 时构建并保存关系表 → `term_read_key()` → `app_handle_key()`；编辑器按键后再刷新 outline/info/callflow。
+3. 主循环：`app_layout()` → 选择项修正 → 编辑器焦点时 `app_sync_callflow()` → `app_render()`（含补全浮层）→ `relations_pending` 时构建并保存关系表 → `term_read_key()` → `app_handle_key()`；编辑器按键后再刷新 outline/info/callflow。编辑字符/退格/删除后由 `app_completion_update()` 重新收集候选。
 4. 退出时保存 `.si-index`（关系表就绪时）和 `~/.si-c-state`（含 `recent=` 历史），再 `term_shutdown()`。
 
 - 渲染是整帧重绘：`app_render()` 把内容写入 `Str`，最后一次性 `term_write()`，并用 `ESC[?2026h/l` 同步输出；不要在 `render.c` 里直接写 stdout。
@@ -43,7 +43,7 @@
 - `Buffer`（`text.h`）：连续 UTF-8 字节；`cursor` 是字节偏移，列是显示列；Tab 宽 4。移动和删除必须用 `utf8_prev()` / `utf8_next()` / `buf_*` 辅助函数，不能假设一个字符占一个字节。
 - 编辑后行索引会失效，`buf_line_*` 按需重建；撤销按 `group` 合并，`buf_undo_break()` 用于切断组。
 - `Project`（`index.h`）：`files[]` 按 `rel` 排序，`syms[]` 按 file/line/col/kind/name 排序并去重；每个文件的符号在 `syms` 中必须连续，`files[i].sym_start/sym_count` 依赖这个不变量。改索引器时保持它。
-- 索引流程（`index.c`）：`scan_dir()` 递归扫描（跳过隐藏目录、符号链接目录和固定构建目录）→ `lex_source()`（跳过注释和字符串）→ `parse_source()` 依次解析宏、聚合类型、typedef、函数、全局变量。解析器是启发式的，不展开宏、不建 AST、不处理模板/继承/重载。
+- 索引流程（`index.c`）：`scan_dir()` 递归扫描（跳过隐藏目录、符号链接目录和固定构建目录）→ `lex_source()`（跳过注释和字符串）→ `parse_source()` 依次解析宏、聚合类型、typedef、函数、全局变量。解析器是启发式的，不展开宏、不建 AST、不处理模板/继承/重载。`parse_variables()` 支持 `struct Point origin;`、带初始化器的全局变量和顶层多声明符；`project_aggregate_members()` 按需读取源文件提取结构体/联合/类数据成员，供补全使用。
 - 关系表是独立阶段：`project_load()` 只建符号；`project_build_relations()` 才建调用边和全局变量使用表。CALL FLOW 在未构建时显示 `RELATION INDEX NOT BUILT`，按 `Alt/Option+R` 或在大项目提示中确认后才构建；写 UI 测试时要显式调用它。
 - `project_find_refs()` / `project_search_text()` 从磁盘重新读文件，不包含未保存的缓冲区；`--refs` / `--search` 同理。
 - 缓存 `.si-index` 位于项目根目录，magic 为 `SICACH2`、版本为 `2`。改动 `Project`/`ProjectFile`/`Symbol`/`CallEdge`/`VarUse` 的持久化字段或顺序时，必须提升 `SI_CACHE_VERSION`（必要时改 magic），否则旧缓存会被错误解读。缓存只校验文件大小 + mtime，不做增量扫描；新增或删除文件需按 F5 重建。
@@ -53,7 +53,8 @@
 ## 修改指引
 
 - 加 UI 功能：`App` 字段放 `app.h` → 按键/动作放 `app.c` → 绘制放 `render.c` → 在 `tests/ui_smoke.c` 用 `app_handle_key_event()` / `app_handle_mouse_event()` 加覆盖。测试可用 `force_rows` / `force_cols` 固定布局。
-- 改索引/符号：同步 `index.c` + `index.h` + `test_core`；若改了缓存布局，提升版本号。
+- 改变量补全：`app.c` 的 `/* --- Completion --- */` 分节负责上下文、候选、接受和抑制；`render.c:draw_completion()` 画浮层；`index.c` 的 `project_type_aggregate_key()` / `project_aggregate_members()` 解析成员。`app_rebuild_globals()` 重建按名字排序的符号指针索引并清空成员缓存；项目重载/F5 后缓存自动失效。
+- 改索引/符号：同步 `index.c` + `index.h` + `test_core`；若改了缓存布局，提升版本号。补全新增的全局变量符号不改变 `.si-index` 格式，但旧缓存需要 F5 才能看到。
 - 改终端按键/鼠标：`term.c` + `term.h` + `test_keys`；macOS 的 Option 符号映射在 `term.c:mac_option_base_key()`。
 - 改启动/最近项目：`util.c` 的 `state_*` + `app.c` 的 `app_project_picker_*` / `app_recent_touch()` + `render.c:draw_project_picker()`；`test_core` 覆盖状态历史，`ui_smoke` 覆盖列表交互。
 - 常量与上限集中在 `si.h`（单文件 4 MiB、文件数 20k、符号数 200k、关系自动构建阈值 2k 文件 / 12 层）；改限制时同步 README。
