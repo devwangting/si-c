@@ -1,5 +1,6 @@
 #include "si.h"
 #include "index.h"
+#include "syntax.h"
 #include "text.h"
 
 #include <math.h>
@@ -413,6 +414,28 @@ static void test_state(void)
 }
 #endif
 
+static void test_syntax_lists(void)
+{
+    bool has_return = false;
+    bool has_int = false;
+    size_t i;
+
+    for (i = 0; i < syntax_keyword_count(); i++) {
+        if (strcmp(syntax_keyword_at(i), "return") == 0)
+            has_return = true;
+    }
+    for (i = 0; i < syntax_type_count(); i++) {
+        if (strcmp(syntax_type_at(i), "int") == 0)
+            has_int = true;
+    }
+    check(has_return, "syntax keyword list has return");
+    check(has_int, "syntax type list has int");
+    check(syntax_keyword_at(syntax_keyword_count()) == NULL,
+          "keyword index out of range");
+    check(syntax_type_at(syntax_type_count()) == NULL,
+          "type index out of range");
+}
+
 int main(int argc, char **argv)
 {
     const char *root = argc > 1 ? argv[1] : "tests/fixtures/demo";
@@ -421,6 +444,7 @@ int main(int argc, char **argv)
     test_buffer();
     test_names();
     test_syntax();
+    test_syntax_lists();
 #ifndef _WIN32
     test_state();
 #endif

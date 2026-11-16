@@ -60,6 +60,26 @@ static bool is_type(const char *s, size_t len)
     return name_in(s, len, types, SI_ARRAY_LEN(types));
 }
 
+size_t syntax_keyword_count(void)
+{
+    return SI_ARRAY_LEN(keywords);
+}
+
+const char *syntax_keyword_at(size_t index)
+{
+    return index < SI_ARRAY_LEN(keywords) ? keywords[index] : NULL;
+}
+
+size_t syntax_type_count(void)
+{
+    return SI_ARRAY_LEN(types);
+}
+
+const char *syntax_type_at(size_t index)
+{
+    return index < SI_ARRAY_LEN(types) ? types[index] : NULL;
+}
+
 void syntax_init(SyntaxCache *syn)
 {
     syn->states = NULL;

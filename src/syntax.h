@@ -37,5 +37,9 @@ void syntax_free(SyntaxCache *syn);
 void syntax_ensure(SyntaxCache *syn, Buffer *b);
 int syntax_line_spans(SyntaxCache *syn, Buffer *b, int line,
                       HlSpan *spans, int max_spans);
+size_t syntax_keyword_count(void);
+const char *syntax_keyword_at(size_t index);
+size_t syntax_type_count(void);
+const char *syntax_type_at(size_t index);
 
 #endif /* SI_SYNTAX_H */
