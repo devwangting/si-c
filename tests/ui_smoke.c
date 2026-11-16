@@ -44,6 +44,16 @@ static void type_text(App *a, const char *s)
     }
 }
 
+static LocalVar *find_local(App *a, const char *name)
+{
+    size_t i;
+    for (i = 0; i < a->nlocals; i++) {
+        if (strcmp(a->locals[i].name, name) == 0)
+            return &a->locals[i];
+    }
+    return NULL;
+}
+
 int main(int argc, char **argv)
 {
     const char *root = argc > 1 ? argv[1] : "tests/fixtures/demo";
@@ -79,6 +89,23 @@ int main(int argc, char **argv)
     b = app_buffer(&a);
     check(b != NULL, "buffer opened");
     check(a.outline.count > 0, "file outline populated");
+    {
+        BufMatch cm;
+        check(buf_find(b, "int result = 0, other;", 0, true, false, &cm),
+              "find multi declarator locals");
+        b->cursor = (int)cm.pos;
+        app_update_info(&a);
+        check(find_local(&a, "result") != NULL, "local result");
+        check(find_local(&a, "other") != NULL, "local other");
+        check(find_local(&a, "local_p") != NULL, "local local_p");
+        check(find_local(&a, "local_q") != NULL, "local local_q");
+        check(buf_find(b, "node.pos.y", 0, true, false, &cm),
+              "find completion return");
+        b->cursor = (int)cm.pos;
+        app_update_info(&a);
+        check(a.info_valid && strstr(a.info_type, "CompletionNode") != NULL,
+              "info resolves CompletionNode local");
+    }
     /* Before relation tables exist, CALL FLOW must show Alt+R guidance. */
     {
         BufMatch hm;

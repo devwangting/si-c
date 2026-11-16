@@ -1324,6 +1324,204 @@ static bool control_word(const char *s)
     return false;
 }
 
+static bool type_prefix_has_word(const char *s)
+{
+    while (*s) {
+        if (isalpha((unsigned char)*s) || *s == '_')
+            return true;
+        s++;
+    }
+    return false;
+}
+
+static bool type_suffix_word(const char *s, size_t len)
+{
+    static const char *const words[] = {
+        "const", "volatile", "restrict", "_Atomic", "__restrict",
+        "__restrict__"
+    };
+    size_t i;
+    for (i = 0; i < SI_ARRAY_LEN(words); i++) {
+        if (strlen(words[i]) == len && memcmp(words[i], s, len) == 0)
+            return true;
+    }
+    return false;
+}
+
+/*
+ * Comma-continued declarations such as `int a, b;` put no type directly
+ * before `b`.  Recover the base type from the first declarator, then add
+ * only the pointer/qualifier text that belongs to this declarator.
+ */
+static bool type_prefix_from_base(const char *line, size_t len,
+                                  size_t word_pos, size_t seg_start,
+                                  char *out, size_t out_size)
+{
+    size_t stmt_start = 0;
+    size_t i;
+    size_t cut;
+    size_t first_decl_end = word_pos;
+    size_t name_end;
+    size_t name_start;
+    size_t base_end;
+    size_t suffix_start = seg_start;
+    size_t suffix_end = word_pos;
+    size_t used;
+    int paren = 0;
+    int brack = 0;
+    int brace = 0;
+    char quote = '\0';
+
+    if (word_pos > len)
+        return false;
+    for (i = 0; i < word_pos; i++) {
+        if (line[i] == ';' || line[i] == '{' || line[i] == '}' ||
+            line[i] == '(')
+            stmt_start = i + 1;
+    }
+
+    for (i = stmt_start; i < word_pos; i++) {
+        char c = line[i];
+        if (quote) {
+            if (c == '\\' && i + 1 < word_pos) {
+                i++;
+                continue;
+            }
+            if (c == quote)
+                quote = '\0';
+            continue;
+        }
+        if (c == '"' || c == '\'') {
+            quote = c;
+            continue;
+        }
+        if (c == '/' && i + 1 < word_pos && line[i + 1] == '/')
+            return false;
+        if (c == '(') {
+            paren++;
+        } else if (c == ')' && paren > 0) {
+            paren--;
+        } else if (c == '[') {
+            brack++;
+        } else if (c == ']' && brack > 0) {
+            brack--;
+        } else if (c == '{') {
+            brace++;
+        } else if (c == '}' && brace > 0) {
+            brace--;
+        } else if (c == ',' && paren == 0 && brack == 0 && brace == 0) {
+            first_decl_end = i;
+            break;
+        }
+    }
+    if (first_decl_end >= word_pos)
+        return false;
+
+    cut = first_decl_end;
+    paren = brack = brace = 0;
+    quote = '\0';
+    for (i = stmt_start; i < first_decl_end; i++) {
+        char c = line[i];
+        if (quote) {
+            if (c == '\\' && i + 1 < first_decl_end) {
+                i++;
+                continue;
+            }
+            if (c == quote)
+                quote = '\0';
+            continue;
+        }
+        if (c == '"' || c == '\'') {
+            quote = c;
+            continue;
+        }
+        if (c == '(') {
+            paren++;
+        } else if (c == ')' && paren > 0) {
+            paren--;
+        } else if (c == '[') {
+            brack++;
+        } else if (c == ']' && brack > 0) {
+            brack--;
+        } else if (c == '{') {
+            brace++;
+        } else if (c == '}' && brace > 0) {
+            brace--;
+        } else if (paren == 0 && brack == 0 && brace == 0 &&
+                   (c == '=' || c == '[' || c == ':')) {
+            cut = i;
+            break;
+        }
+    }
+
+    name_end = cut;
+    while (name_end > stmt_start &&
+           (line[name_end - 1] == ' ' || line[name_end - 1] == '\t'))
+        name_end--;
+    name_start = name_end;
+    while (name_start > stmt_start &&
+           (isalnum((unsigned char)line[name_start - 1]) ||
+            line[name_start - 1] == '_'))
+        name_start--;
+    if (name_start == name_end)
+        return false;
+
+    base_end = name_start;
+    for (;;) {
+        while (base_end > stmt_start &&
+               (line[base_end - 1] == ' ' || line[base_end - 1] == '\t'))
+            base_end--;
+        if (base_end > stmt_start &&
+            (line[base_end - 1] == '*' || line[base_end - 1] == '&')) {
+            base_end--;
+            continue;
+        }
+        {
+            size_t word_start = base_end;
+            while (word_start > stmt_start &&
+                   (isalnum((unsigned char)line[word_start - 1]) ||
+                    line[word_start - 1] == '_'))
+                word_start--;
+            if (word_start < base_end &&
+                type_suffix_word(line + word_start, base_end - word_start)) {
+                base_end = word_start;
+                continue;
+            }
+        }
+        break;
+    }
+    while (base_end > stmt_start &&
+           (line[base_end - 1] == ' ' || line[base_end - 1] == '\t'))
+        base_end--;
+    if (base_end <= stmt_start)
+        return false;
+
+    while (suffix_start < suffix_end &&
+           (line[suffix_start] == ' ' || line[suffix_start] == '\t'))
+        suffix_start++;
+    while (suffix_end > suffix_start &&
+           (line[suffix_end - 1] == ' ' || line[suffix_end - 1] == '\t'))
+        suffix_end--;
+
+    used = base_end - stmt_start;
+    if (used >= out_size)
+        used = out_size - 1;
+    memcpy(out, line + stmt_start, used);
+    out[used] = '\0';
+    if (suffix_start < suffix_end) {
+        size_t n = suffix_end - suffix_start;
+        if (used + 1 < out_size) {
+            out[used++] = ' ';
+            if (n > out_size - 1 - used)
+                n = out_size - 1 - used;
+            memcpy(out + used, line + suffix_start, n);
+            used += n;
+            out[used] = '\0';
+        }
+    }
+    return true;
+}
+
 static bool type_prefix(const char *line, size_t len, size_t word_pos,
                         char *out, size_t out_size)
 {
@@ -1344,12 +1542,20 @@ static bool type_prefix(const char *line, size_t len, size_t word_pos,
     while (end > start &&
            (line[end - 1] == ' ' || line[end - 1] == '\t'))
         end--;
-    if (end <= start)
-        return false;
-    if (end - start >= out_size)
-        end = start + out_size - 1;
-    memcpy(out, line + start, end - start);
-    out[end - start] = '\0';
+    out[0] = '\0';
+    if (end > start) {
+        if (end - start >= out_size)
+            end = start + out_size - 1;
+        memcpy(out, line + start, end - start);
+        out[end - start] = '\0';
+    }
+    if (!type_prefix_has_word(out)) {
+        char base[256];
+        if (!type_prefix_from_base(line, len, word_pos, start, base,
+                                   sizeof(base)))
+            return false;
+        snprintf(out, out_size, "%s", base);
+    }
     if (strchr(out, '=') || strchr(out, '.') || strchr(out, '[') ||
         strstr(out, "->") || strpbrk(out, "+/%!?|\""))
         return false;
