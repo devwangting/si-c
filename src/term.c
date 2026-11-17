@@ -114,6 +114,15 @@ static int key_for_shift_f(int n)
     return KEY_SHIFT_F1 + (n - 1);
 }
 
+static int key_for_ctrl_f(int n)
+{
+    if (n == 3)
+        return KEY_CTRL_F3;
+    if (n == 4)
+        return KEY_CTRL_F4;
+    return key_for_f(n);
+}
+
 static int csi_key(const char *seq, int len, KeyEvent *ev)
 {
     int params[8];
@@ -185,7 +194,10 @@ static int csi_key(const char *seq, int len, KeyEvent *ev)
         }
         if (final == 'P' || final == 'Q' || final == 'R' || final == 'S') {
             int n = final == 'P' ? 1 : final == 'Q' ? 2 : final == 'R' ? 3 : 4;
-            ev->code = shift ? key_for_shift_f(n) : key_for_f(n);
+            if (ctrl && (n == 3 || n == 4))
+                ev->code = key_for_ctrl_f(n);
+            else
+                ev->code = shift ? key_for_shift_f(n) : key_for_f(n);
             return 1;
         }
         if (final == '~') {
@@ -216,7 +228,10 @@ static int csi_key(const char *seq, int len, KeyEvent *ev)
             }
             if (n >= 11 && n <= 14) {
                 int fn = n - 10;
-                ev->code = shift ? key_for_shift_f(fn) : key_for_f(fn);
+                if (ctrl && (fn == 3 || fn == 4))
+                    ev->code = key_for_ctrl_f(fn);
+                else
+                    ev->code = shift ? key_for_shift_f(fn) : key_for_f(fn);
                 return 1;
             }
             if (n == 15 || (n >= 17 && n <= 21) || n == 23 || n == 24) {
@@ -521,6 +536,10 @@ int term_read_key(KeyEvent *ev)
         ev->code = extended_key(e);
         if (e == 68 && (GetAsyncKeyState(VK_CONTROL) & 0x8000))
             ev->code = KEY_CTRL_F10;
+        else if (e == 61 && (GetAsyncKeyState(VK_CONTROL) & 0x8000))
+            ev->code = KEY_CTRL_F3;
+        else if (e == 62 && (GetAsyncKeyState(VK_CONTROL) & 0x8000))
+            ev->code = KEY_CTRL_F4;
         return ev->code ? 1 : 0;
     }
     if (c == 8 || c == 127) {

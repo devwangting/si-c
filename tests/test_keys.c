@@ -77,6 +77,10 @@ int main(void)
     check_key("24;2~", KEY_SHIFT_F12);
     check_key("21~", KEY_F10);
     check_key("21;5~", KEY_CTRL_F10);
+    check_key("1;5R", KEY_CTRL_F3);
+    check_key("1;5S", KEY_CTRL_F4);
+    check_key("13;5~", KEY_CTRL_F3);
+    check_key("14;5~", KEY_CTRL_F4);
     check_key("1;5C", KEY_CTRL_RIGHT);
     check_key("1;3D", KEY_ALT_LEFT);
     check_key("5~", KEY_PGUP);

@@ -215,16 +215,34 @@ int main(int argc, char **argv)
               "second click opens first file");
     }
 
-    /* F2 and F4 focus the outline/editor without function-key aliases. */
+    /* F2 and Ctrl+F4 focus the outline/editor. */
     key(&a, KEY_F2, NULL);
     check(a.focus == FOCUS_OUTLINE, "F2 focuses outline");
-    key(&a, KEY_F4, NULL);
-    check(a.focus == FOCUS_EDITOR, "F4 focuses editor");
+    key(&a, KEY_CTRL_F4, NULL);
+    check(a.focus == FOCUS_EDITOR, "Ctrl+F4 focuses editor");
+
+    {
+        BufMatch m;
+        int after;
+        check(buf_find(b, "return", 0, true, false, &m),
+              "find return for F3/F4");
+        b->cursor = (int)m.pos;
+        snprintf(a.last_find, sizeof(a.last_find), "return");
+        key(&a, KEY_F3, NULL);
+        check(b->cursor > (int)m.pos, "F3 finds next occurrence");
+        after = b->cursor;
+        key(&a, KEY_F4, NULL);
+        check(b->cursor < after, "F4 finds previous occurrence");
+        a.last_find[0] = '\0';
+        after = b->cursor;
+        key(&a, KEY_F3, NULL);
+        check(b->cursor == after, "F3 without previous search does nothing");
+    }
 
     app_handle_mouse_event(&a, a.lw + 3,
                            a.content_top + a.top_h + 1, 0, false);
     check(a.focus == FOCUS_INFO, "mouse activates symbol info");
-    key(&a, KEY_F4, NULL);
+    key(&a, KEY_CTRL_F4, NULL);
 
     /* Bottom info pane resolves globals and locals. */
     {
@@ -493,8 +511,8 @@ int main(int argc, char **argv)
     check(!a.help, "help closed");
     check(b->len == len_before, "help key not inserted");
 
-    key(&a, KEY_F3, NULL);
-    check(a.focus == FOCUS_CONTEXT, "F3 focuses call flow");
+    key(&a, KEY_CTRL_F3, NULL);
+    check(a.focus == FOCUS_CONTEXT, "Ctrl+F3 focuses call flow");
     key(&a, KEY_DOWN, NULL);
     key(&a, KEY_ENTER, NULL);
     check(a.focus == FOCUS_EDITOR, "call-flow enter returns to editor");
@@ -843,7 +861,7 @@ int main(int argc, char **argv)
             if (a.chooser_active)
                 key(&a, KEY_ESC, NULL);
             else
-                key(&a, KEY_F4, NULL);
+                key(&a, KEY_CTRL_F4, NULL);
             check(!a.comp_active, "F12 does not leave completion open");
 
             move_after_anchor(&a, "util_global++; return add(p.x, p.y);");

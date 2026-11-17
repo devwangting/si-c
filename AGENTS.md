@@ -24,7 +24,7 @@
 - Makefile 的 `%.o: %.c` 不跟踪头文件依赖：改过 `.h` 后执行 `make clean && make -j`，否则可能链接旧对象。
 - 新增 `.c` 时必须同时加入 Makefile 的 `SRC`，以及测试所需的 `CORE` / `UI_CORE`，否则主程序或测试会漏符号。
 - 编译选项是 `-std=c11 -Wall -Wextra -Wpedantic`；当前 GCC 下已有少量 `-Wformat-truncation` 警告（`util.c` / `render.c` / `app.c`），目标是不要新增警告。
-- Linux 当前实测：test_core 235、test_keys 26、ui_smoke 289。`test_keys` 的 macOS Option 用例在 `#if defined(__APPLE__)` 内，数量会与本机不同。
+- Linux 当前实测：test_core 235、test_keys 30、ui_smoke 293。`test_keys` 的 macOS Option 用例在 `#if defined(__APPLE__)` 内，数量会与本机不同。
 
 ## 运行时主流程
 
@@ -36,7 +36,7 @@
 - 渲染是整帧重绘：`app_render()` 把内容写入 `Str`，最后一次性 `term_write()`，并用 `ESC[?2026h/l` 同步输出；不要在 `render.c` 里直接写 stdout。
 - 输入：`term.c` 把字节流解码成 `KeyEvent`；`term_decode_sequence()` 是给测试用的纯解码入口。全局快捷键在 `app_handle_key()`，各面板按键在 `app_handle_editor_key()` / `app_handle_outline_key()` / `app_handle_file_key()` / `app_handle_symbol_key()`。
 - 模态优先级：`app_handle_key()` 先处理关系表提示、右键菜单、帮助、目录选择器、主菜单、符号选择器、输入提示、最近项目列表，再处理全局快捷键，最后按焦点分发；新增全局键要放在焦点 switch 之前。
-- Ctrl+字母没有统一枚举；现有代码直接用 ASCII 控制码（如 `3`=Ctrl+C、`17`=Ctrl+Q、`19`=Ctrl+S）；新增按键请沿用同一模式。
+- Ctrl+字母没有统一枚举；现有代码直接用 ASCII 控制码（如 `3`=Ctrl+C、`17`=Ctrl+Q、`19`=Ctrl+S）；新增按键请沿用同一模式。`F3`/`F4` 是当前文件查找下一个/上一个（复用 `last_find`），`Ctrl+F3`/`Ctrl+F4` 才是聚焦 CALL FLOW/编辑器。
 
 ## 数据模型与索引逻辑
 

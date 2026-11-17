@@ -77,7 +77,7 @@ third-party runtime dependencies, and is AI-generated. See
                            │ 18 │     Point p = {1, 2};   │ CALLERS (1)
                            │ 19 │     printf(...);        │ ↳ int main(void)   main.c:16
                            │ 20 │     return add(...);    │
- F2 outline  F3 flow  F4 editor  F7 files  ^R context  ^F find  ^S save  F1 help
+ F2 outline  ^F3 flow  ^F4 editor  F3 next  F4 prev  F7 files  ^R context  ^F find  ^S save  F1 help
  Ln 18, Col 11  saved  fn:main
 ```
 
@@ -187,8 +187,8 @@ PREFIX=$HOME/.local ./install.sh      # 安装到用户目录
 | --- | --- |
 | `F1` / `Ctrl+H` | 帮助 |
 | `F2` / `Ctrl+B` | 聚焦左侧文件大纲 |
-| `F3` | 聚焦右下调用链 |
-| `F4` / `Esc` | 聚焦编辑器 |
+| `Ctrl+F3` | 聚焦右下调用链 |
+| `Ctrl+F4` / `Esc` | 聚焦编辑器 |
 | `F7` | 聚焦右上项目文件列表 |
 | `Tab` / `Shift+Tab` | 循环切换五个面板 |
 | `Ctrl+T` | 循环切换焦点 |
@@ -222,6 +222,8 @@ PREFIX=$HOME/.local ./install.sh      # 安装到用户目录
 | `Ctrl+A` | 保存所有文件 |
 | `Ctrl+Z` / `Ctrl+Y` | 撤销 / 重做 |
 | `Ctrl+F` | 文件内查找 / 查找下一个 |
+| `F3` | 按上次搜索内容向下查找（当前文件） |
+| `F4` | 按上次搜索内容向上查找（当前文件） |
 | `F8` | 变量高亮 / 取消高亮 |
 | `Shift+F8` | 查找上一个 |
 | `F6` | 代码整理（ANSI 风格） |

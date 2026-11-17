@@ -1217,11 +1217,11 @@ static void draw_hint(App *a, Str *out)
     else if (a->focus == FOCUS_CONTEXT)
         hint = " CALL FLOW  Up/Down select  Enter jumps  Tab focus  Esc editor  F1 help ";
     else if (a->focus == FOCUS_INFO)
-        hint = " SYMBOL INFO  Tab focus  F4/Esc editor  F1 help ";
+        hint = " SYMBOL INFO  Tab focus  Ctrl+F4/Esc editor  F1 help ";
     else if (a->cols < 120)
-        hint = " F2 outline  F3 flow  F4 editor  F7 files  F6 format  ^F find  F8 hi  F10 back  ^F10 fwd  F1 help ";
+        hint = " F2 outline  ^F3 flow  ^F4 editor  F3 next  F4 prev  F7 files  F6 format  ^F find  F1 help ";
     else
-        hint = " F2 outline  F3 call-flow  F4 editor  F7 files  F6 format  ^F find  F8 highlight  F10 back  ^F10 fwd  F12 def  Shift+F12 refs  F1 help ";
+        hint = " F2 outline  Ctrl+F3 call-flow  Ctrl+F4 editor  F3 next  F4 prev  F7 files  F6 format  ^F find  F8 highlight  F10 back  ^F10 fwd  F12 def  Shift+F12 refs  F1 help ";
 
     sgr_move(out, a->rows - 2, 0);
     sgr_bg(out, a->theme.panel_alt);
@@ -2573,14 +2573,14 @@ static void draw_help(App *a, Str *out)
 {
     enum { HELP_COLS = 4, HELP_ROWS = 9 };
     static const char *const lines[HELP_ROWS * HELP_COLS] = {
-        "F1  Help",         "F2  Outline",       "F3  Call flow",
-        "F4  Editor",       "F5  Reindex",       "F6  Format",
+        "F1  Help",         "F2  Outline",       "Ctrl+F3 Flow",
+        "Ctrl+F4 Editor",   "F5  Reindex",       "F6  Format",
         "F7  Files",        "F8  Highlight",     "F9  Next file",
         "F10 Back",         "Alt/Opt+M Menu",    "F12 Definition",
-        "Ctrl+F10 Fwd",     "Ctrl+A Save all",   "Ctrl+B Outline",
+        "Ctrl+F10 Fwd",     "Ctrl+A Save all",   "F3  Find next",
         "Ctrl+C Copy",      "Ctrl+D Delete",     "Ctrl+E End line",
         "Ctrl+F Find",      "Ctrl+G Goto line",  "Ctrl+H Help",
-        "Ctrl+K Kill line", "Ctrl+L Goto line",  "Ctrl+N New proj",
+        "Ctrl+K Kill line", "F4  Find prev",     "Ctrl+N New proj",
         "Ctrl+O Open proj", "Ctrl+P Symbols",    "Ctrl+Q Quit",
         "Ctrl+R Call flow", "Ctrl+S Save",       "Ctrl+T Cycle focus",
         "Ctrl+U Kill start","Ctrl+V Paste",      "Ctrl+Y Redo",
@@ -2670,7 +2670,7 @@ static void draw_splash(App *a, Str *out, int row)
         "SI-C  Source Insight style C/C++ browser",
         "",
         "Ctrl+O open project   Ctrl+N new project   F1 help",
-        "F2 outline   F3 call flow   F7 project files   F12 definition",
+        "F2 outline   Ctrl+F3 call flow   F7 project files   F12 definition",
         "Ctrl+P symbol search   Ctrl+G go to line   Ctrl+F find"
     };
     int start = a->content_height / 2 - 2;

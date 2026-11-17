@@ -56,6 +56,8 @@ enum {
     KEY_SHIFT_F10,
     KEY_SHIFT_F11,
     KEY_SHIFT_F12,
+    KEY_CTRL_F3,
+    KEY_CTRL_F4,
     KEY_MOUSE,
     KEY_ALT_CHAR
 };

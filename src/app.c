@@ -3357,7 +3357,8 @@ static void action_find(App *a, const char *needle, bool forward)
     b->goal_col = buf_visual_col(b, m.pos);
     a->find_pos = (int)m.pos;
     a->find_len = (int)m.len;
-    snprintf(a->last_find, sizeof(a->last_find), "%s", needle);
+    if (needle != a->last_find)
+        snprintf(a->last_find, sizeof(a->last_find), "%s", needle);
     app_set_status(a, "Found at %d:%d", m.line + 1, m.col + 1);
     app_ensure_visible(a);
 }
@@ -6556,12 +6557,26 @@ static void app_handle_key(App *a, KeyEvent *ev)
         focus_outline(a);
         return;
     }
-    if (ev->code == KEY_F3) {
+    if (ev->code == KEY_CTRL_F3) {
         focus_context(a);
         return;
     }
-    if (ev->code == KEY_F4) {
+    if (ev->code == KEY_CTRL_F4) {
         a->focus = FOCUS_EDITOR;
+        return;
+    }
+    if (ev->code == KEY_F3) {
+        if (a->last_find[0])
+            action_find(a, a->last_find, true);
+        else
+            app_set_status(a, "No previous search");
+        return;
+    }
+    if (ev->code == KEY_F4) {
+        if (a->last_find[0])
+            action_find(a, a->last_find, false);
+        else
+            app_set_status(a, "No previous search");
         return;
     }
     if (ev->code == KEY_F7) {
@@ -6680,7 +6695,7 @@ static void app_handle_key(App *a, KeyEvent *ev)
         app_handle_symbol_key(a, ev);
         break;
     case FOCUS_INFO:
-        if (ev->code == KEY_ESC || ev->code == KEY_F4) {
+        if (ev->code == KEY_ESC || ev->code == KEY_CTRL_F4) {
             a->focus = FOCUS_EDITOR;
         } else if (ev->code == KEY_UP || ev->code == KEY_PGUP ||
                    ev->code == KEY_DOWN || ev->code == KEY_PGDN ||
