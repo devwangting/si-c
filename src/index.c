@@ -864,7 +864,7 @@ static void parse_functions(Parser *ps)
         }
         if (preproc_is(ps, i, "endif")) {
             if (cond_top >= 0)
-                top = cond_stack[cond_top--];
+                cond_top--;
             continue;
         }
         if (tok_is(ps, i, '{')) {
@@ -1398,7 +1398,7 @@ static void compute_braces(Parser *ps)
                 d = cond_stack[cond_top];
         } else if (preproc_is(ps, i, "endif")) {
             if (cond_top >= 0)
-                d = cond_stack[cond_top--];
+                cond_top--;
         } else if (tok_is(ps, i, '{')) {
             stack[++top] = i;
             d++;
@@ -1480,7 +1480,8 @@ void project_member_list_free(ProjectMemberList *l)
 
 static void member_list_add(ProjectMemberList *l, const char *name,
                             const char *type, const char *signature,
-                            bool is_array)
+                            bool is_array, bool is_method, bool is_static,
+                            bool is_type)
 {
     size_t i;
     ProjectMember *m;
@@ -1500,6 +1501,9 @@ static void member_list_add(ProjectMemberList *l, const char *name,
     m->type = xstrdup(type ? type : "");
     m->signature = xstrdup(signature ? signature : name);
     m->is_array = is_array;
+    m->is_method = is_method;
+    m->is_static = is_static;
+    m->is_type = is_type;
 }
 
 static bool type_word_qualifier(const char *s, size_t n)
@@ -1754,7 +1758,8 @@ static bool member_has_array(const char *src, const Tok *t, int name,
 
 static void member_segment_add(const char *src, const Tok *t,
                                ProjectMemberList *out, int base_start,
-                               int base_end, int seg, int end, bool first)
+                               int base_end, int seg, int end, bool first,
+                               bool is_static)
 {
     int name = member_name_index(src, t, seg, end);
     bool is_array;
@@ -1790,10 +1795,24 @@ static void member_segment_add(const char *src, const Tok *t,
     }
     signature = tok_range_text(src, t, seg, name);
     name_text = tok_range_text(src, t, name, name);
-    member_list_add(out, name_text, type, signature, is_array);
+    member_list_add(out, name_text, type, signature, is_array, false,
+                    is_static, false);
     free(name_text);
     free(type);
     free(signature);
+}
+
+static bool member_control_name(const char *src, const Tok *t, int i)
+{
+    static const char *const words[] = {
+        "if", "for", "while", "switch", "return", "sizeof", "catch"
+    };
+    size_t k;
+    for (k = 0; k < SI_ARRAY_LEN(words); k++) {
+        if (tok_is_text(src, &t[i], words[k]))
+            return true;
+    }
+    return false;
 }
 
 static void process_member_statement(const char *src, const Tok *t, int n,
@@ -1811,6 +1830,7 @@ static void process_member_statement(const char *src, const Tok *t, int n,
     int first_end;
     int first_name;
     int seg;
+    bool is_static = false;
 
     if (start >= end)
         return;
@@ -1826,9 +1846,15 @@ static void process_member_statement(const char *src, const Tok *t, int n,
     if (tok_is_text(src, &t[start], "typedef") ||
         tok_is_text(src, &t[start], "using") ||
         tok_is_text(src, &t[start], "friend") ||
-        tok_is_text(src, &t[start], "template") ||
-        tok_is_text(src, &t[start], "static"))
+        tok_is_text(src, &t[start], "template"))
         return;
+
+    for (i = start; i < end; i++) {
+        if (tok_is_text(src, &t[i], "static"))
+            is_static = true;
+        if (tok_is_punct(src, &t[i], '(') || tok_is_punct(src, &t[i], '='))
+            break;
+    }
 
     for (i = start; i < end; i++) {
         if (tok_is_punct(src, &t[i], '(')) {
@@ -1856,6 +1882,23 @@ static void process_member_statement(const char *src, const Tok *t, int n,
         int q;
         if (close < 0 || close >= end)
             return;
+        if (tok_is_text(src, &t[start], "struct") ||
+            tok_is_text(src, &t[start], "union") ||
+            tok_is_text(src, &t[start], "class") ||
+            tok_is_text(src, &t[start], "enum")) {
+            int name = body_open - 1;
+            while (name > start && !tok_is_ident(&t[name]))
+                name--;
+            if (name > start && tok_is_ident(&t[name])) {
+                char *name_text = tok_range_text(src, t, name, name);
+                char *signature =
+                    tok_range_text(src, t, start, body_open - 1);
+                member_list_add(out, name_text, "", signature, false, false,
+                                false, true);
+                free(signature);
+                free(name_text);
+            }
+        }
         seg = close + 1;
         for (q = close + 1; q <= end; q++) {
             if (q == end || tok_is_punct(src, &t[q], ',') ||
@@ -1865,7 +1908,8 @@ static void process_member_statement(const char *src, const Tok *t, int n,
                     char *name_text = tok_range_text(src, t, name, name);
                     char *signature =
                         tok_range_text(src, t, seg, name);
-                    member_list_add(out, name_text, "", signature, false);
+                    member_list_add(out, name_text, "", signature, false,
+                                    false, false, false);
                     free(signature);
                     free(name_text);
                 }
@@ -1886,7 +1930,17 @@ static void process_member_statement(const char *src, const Tok *t, int n,
             tok_is_ident(&t[lparen + 2])) {
             char *name_text = tok_range_text(src, t, lparen + 2, lparen + 2);
             char *signature = tok_range_text(src, t, start, end - 1);
-            member_list_add(out, name_text, "", signature, false);
+            member_list_add(out, name_text, "", signature, false, false,
+                            is_static, false);
+            free(signature);
+            free(name_text);
+        } else if (lparen > start && tok_is_ident(&t[lparen - 1]) &&
+                   !member_control_name(src, t, lparen - 1)) {
+            char *name_text =
+                tok_range_text(src, t, lparen - 1, lparen - 1);
+            char *signature = tok_range_text(src, t, start, end - 1);
+            member_list_add(out, name_text, "", signature, false, true,
+                            is_static, false);
             free(signature);
             free(name_text);
         }
@@ -1944,7 +1998,7 @@ static void process_member_statement(const char *src, const Tok *t, int n,
         }
         if (split) {
             member_segment_add(src, t, out, start, base_end, seg, i,
-                               seg == start);
+                               seg == start, is_static);
             seg = i + 1;
         }
     }
@@ -1972,6 +2026,7 @@ static void collect_members(const char *src, const Tok *t, int n,
                     paren_before = true;
             }
             if (paren_before && !eq_before) {
+                process_member_statement(src, t, n, stmt_start, i, out);
                 i = end >= 0 ? end + 1 : close;
                 stmt_start = i;
                 continue;
@@ -2016,8 +2071,11 @@ static char *read_project_source(Project *p, int file_index, int *len_out)
     return text;
 }
 
+static bool aggregate_members_internal(Project *p, const char *key,
+                                       ProjectMemberList *out, int depth);
+
 static bool collect_symbol_body(Project *p, const Symbol *s,
-                                ProjectMemberList *out)
+                                ProjectMemberList *out, int depth)
 {
     char *src;
     int len = 0;
@@ -2059,13 +2117,54 @@ static bool collect_symbol_body(Project *p, const Symbol *s,
         return false;
     }
     collect_members(src, lx.toks, lx.count, open, close, out);
+    if (s->kind == SYM_CLASS || s->kind == SYM_STRUCT) {
+        int colon = -1;
+        int angle = 0;
+        int k;
+        for (k = sym_tok + 1; k < open; k++) {
+            if (tok_is_punct(src, &lx.toks[k], '<')) {
+                angle++;
+            } else if (tok_is_punct(src, &lx.toks[k], '>') && angle > 0) {
+                angle--;
+            } else if (angle == 0 && tok_is_punct(src, &lx.toks[k], ':')) {
+                colon = k;
+                break;
+            }
+        }
+        if (colon >= 0) {
+            int seg = colon + 1;
+            angle = 0;
+            for (k = colon + 1; k <= open; k++) {
+                bool split = k == open;
+                if (!split) {
+                    if (tok_is_punct(src, &lx.toks[k], '<')) {
+                        angle++;
+                    } else if (tok_is_punct(src, &lx.toks[k], '>') &&
+                               angle > 0) {
+                        angle--;
+                    } else if (angle == 0 &&
+                               tok_is_punct(src, &lx.toks[k], ',')) {
+                        split = true;
+                    }
+                }
+                if (split) {
+                    int q = k - 1;
+                    while (q >= seg && !tok_is_ident(&lx.toks[q]))
+                        q--;
+                    if (q >= seg) {
+                        char *base = tok_range_text(src, lx.toks, q, q);
+                        aggregate_members_internal(p, base, out, depth + 1);
+                        free(base);
+                    }
+                    seg = k + 1;
+                }
+            }
+        }
+    }
     lex_free(&lx);
     free(src);
     return true;
 }
-
-static bool aggregate_members_internal(Project *p, const char *key,
-                                       ProjectMemberList *out, int depth);
 
 static bool collect_typedef_body(Project *p, const Symbol *s,
                                  ProjectMemberList *out, int depth)
@@ -2178,7 +2277,7 @@ static bool aggregate_members_internal(Project *p, const char *key,
         Symbol *s = &p->syms[ids.items[i]];
         if (s->kind == SYM_STRUCT || s->kind == SYM_UNION ||
             s->kind == SYM_CLASS) {
-            if (collect_symbol_body(p, s, out))
+            if (collect_symbol_body(p, s, out, depth))
                 found = true;
         } else if (s->kind == SYM_TYPEDEF) {
             if (collect_typedef_body(p, s, out, depth))

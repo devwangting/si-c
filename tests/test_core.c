@@ -301,6 +301,19 @@ static void test_project(const char *root)
             intlist_free(&bids);
             check(bm_idx >= 0, "function after #else branch is indexed");
             check(ba_idx >= 0, "function in #ifdef branch is indexed");
+            {
+                IntList fids;
+                size_t fcount = 0;
+                intlist_init(&fids);
+                project_find_symbols(&p, "callback_target", &fids);
+                for (j = 0; j < fids.count; j++) {
+                    if (p.syms[fids.items[j]].kind == SYM_FUNCTION)
+                        fcount++;
+                }
+                intlist_free(&fids);
+                check(fcount == 1,
+                      "call inside if is not indexed as a function");
+            }
             if (bm_idx >= 0) {
                 check(project_context(&p, bm_idx, &ctx),
                       "branch main context");
@@ -424,6 +437,29 @@ static void test_project(const char *root)
         m = find_member(&members, "point_arr");
         check(m != NULL && m->is_array && strcmp(m->type, "Point") == 0,
               "CompletionNode.point_arr is an array");
+        project_member_list_free(&members);
+
+        project_member_list_init(&members);
+        check(project_aggregate_members(&p, "Thing", &members),
+              "C++ class members found");
+        check(members.count == 7, "Thing has seven members including base");
+        m = find_member(&members, "base_value");
+        check(m != NULL && !m->is_method && !m->is_static && !m->is_type &&
+              strcmp(m->type, "int") == 0, "inherited base_value is data");
+        m = find_member(&members, "base_method");
+        check(m != NULL && m->is_method, "inherited base_method is method");
+        m = find_member(&members, "value");
+        check(m != NULL && !m->is_method && strcmp(m->type, "int") == 0,
+              "Thing.value is data");
+        m = find_member(&members, "count");
+        check(m != NULL && m->is_static && !m->is_method,
+              "Thing.count is static data");
+        m = find_member(&members, "method");
+        check(m != NULL && m->is_method, "Thing.method is method");
+        m = find_member(&members, "Inner");
+        check(m != NULL && m->is_type, "Thing.Inner is nested type");
+        m = find_member(&members, "use_this");
+        check(m != NULL && m->is_method, "inline method is indexed");
         project_member_list_free(&members);
 
         project_member_list_init(&members);

@@ -54,6 +54,9 @@ typedef struct {
     char *type;
     char *signature;
     bool is_array;
+    bool is_method;
+    bool is_static;
+    bool is_type;
 } ProjectMember;
 
 typedef struct {

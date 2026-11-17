@@ -1232,6 +1232,7 @@ parts.append("""
 <h3>7.5 补全成员与全局变量</h3>
 <p><code>project_type_aggregate_key()</code> 把 <code>const struct Point *</code>、<code>Point[4]</code> 这类类型文本归一成 <code>Point</code>；<code>project_aggregate_members()</code> 按需读取聚合定义所在文件，用词法 token 找到 <code>{...}</code> 并收集第一层数据成员，供 <code>obj.</code> / <code>obj-&gt;</code> 和链式访问使用。</p>
 <p><code>parse_variables()</code> 同时补齐了常见全局变量形式：<code>struct Point origin;</code>、<code>Point world = {1, 2};</code>、<code>struct Point *ptr;</code>、顶层多声明符和数组。每个变量符号的签名以完整类型开头，成员解析不必再猜前一个声明符。</p>
+<p>C++ 类成员除数据字段外，还会收集成员函数、静态成员和嵌套类型；<code>class Thing : public Base</code> 会递归合并基类成员，补全 <code>this-></code> 时则从当前行找到外层类作为接收者类型。</p>
 </section>
 """)
 
@@ -1318,16 +1319,16 @@ parts.append("""
 <tr><td>app.c:842</td><td>insert_at_cursor</td><td>插入字符并移动光标</td></tr>
 <tr><td>app.c:916</td><td>move_vertical</td><td>上下移动，保持 goal_col</td></tr>
 <tr><td>app.c:1761</td><td>app_rebuild_locals</td><td>扫描函数体，建立局部变量表</td></tr>
-<tr><td>app.c:2646</td><td>app_completion_update</td><td>收集并过滤补全候选</td></tr>
-<tr><td>app.c:2722</td><td>app_completion_accept</td><td>替换当前标识符并关闭列表</td></tr>
-<tr><td>app.c:2813</td><td>app_completion_handle_mouse</td><td>补全列表的鼠标命中/双击/滚轮</td></tr>
-<tr><td>app.c:3095</td><td>app_update_info</td><td>更新 CODE 面板的符号/定义/代码范围</td></tr>
-<tr><td>app.c:3789</td><td>app_show_context</td><td>构建调用链或同名函数选择</td></tr>
-<tr><td>app.c:4444</td><td>app_change_project</td><td>切换项目，关闭旧 Buffer，重新索引</td></tr>
-<tr><td>app.c:5544</td><td>app_handle_editor_key</td><td>编辑器的按键命令</td></tr>
-<tr><td>app.c:5903</td><td>editor_offset_at</td><td>鼠标坐标 → Buffer 字节偏移</td></tr>
-<tr><td>app.c:6430</td><td>app_handle_key</td><td>事件优先级分发</td></tr>
-<tr><td>app.c:6921</td><td>ui_run</td><td>初始化、主循环、清理</td></tr>
+<tr><td>app.c:2684</td><td>app_completion_update</td><td>收集并过滤补全候选</td></tr>
+<tr><td>app.c:2765</td><td>app_completion_accept</td><td>替换当前标识符并关闭列表</td></tr>
+<tr><td>app.c:2856</td><td>app_completion_handle_mouse</td><td>补全列表的鼠标命中/双击/滚轮</td></tr>
+<tr><td>app.c:3138</td><td>app_update_info</td><td>更新 CODE 面板的符号/定义/代码范围</td></tr>
+<tr><td>app.c:3832</td><td>app_show_context</td><td>构建调用链或同名函数选择</td></tr>
+<tr><td>app.c:4488</td><td>app_change_project</td><td>切换项目，关闭旧 Buffer，重新索引</td></tr>
+<tr><td>app.c:5587</td><td>app_handle_editor_key</td><td>编辑器的按键命令</td></tr>
+<tr><td>app.c:5946</td><td>editor_offset_at</td><td>鼠标坐标 → Buffer 字节偏移</td></tr>
+<tr><td>app.c:6473</td><td>app_handle_key</td><td>事件优先级分发</td></tr>
+<tr><td>app.c:6964</td><td>ui_run</td><td>初始化、主循环、清理</td></tr>
 <tr><td>text.c:98</td><td>buf_ensure_lines</td><td>重建行起始偏移表</td></tr>
 <tr><td>text.c:170</td><td>buf_line_of_offset</td><td>字节偏移 → 行号（二分）</td></tr>
 <tr><td>text.c:188</td><td>buf_visual_col</td><td>字节偏移 → 显示列</td></tr>
@@ -1346,10 +1347,10 @@ parts.append("""
 <tr><td>index.c:831</td><td>parse_functions</td><td>函数定义/原型识别</td></tr>
 <tr><td>index.c:1379</td><td>compute_braces</td><td>括号配对与分支感知深度</td></tr>
 <tr><td>index.c:1418</td><td>parse_source</td><td>单文件解析入口</td></tr>
-<tr><td>index.c:2360</td><td>project_load</td><td>扫描项目、建立符号索引</td></tr>
-<tr><td>index.c:3141</td><td>build_call_graph</td><td>调用/函数值引用关系图</td></tr>
-<tr><td>index.c:3402</td><td>project_caller_tree</td><td>反向调用者树</td></tr>
-<tr><td>index.c:3453</td><td>project_context</td><td>调用者/被调用者/引用数</td></tr>
+<tr><td>index.c:2459</td><td>project_load</td><td>扫描项目、建立符号索引</td></tr>
+<tr><td>index.c:3240</td><td>build_call_graph</td><td>调用/函数值引用关系图</td></tr>
+<tr><td>index.c:3501</td><td>project_caller_tree</td><td>反向调用者树</td></tr>
+<tr><td>index.c:3552</td><td>project_context</td><td>调用者/被调用者/引用数</td></tr>
 </table>
 </section>
 """)

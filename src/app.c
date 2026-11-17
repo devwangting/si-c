@@ -2548,6 +2548,37 @@ static bool completion_global_type(App *a, const char *name, size_t len,
     return false;
 }
 
+static bool completion_enclosing_class(App *a, int line, char *out,
+                                       size_t out_size)
+{
+    int fi = app_active_file_index(a);
+    int best = -1;
+    int best_span = INT_MAX;
+    int i;
+
+    if (fi < 0 || (size_t)fi >= a->project.file_count)
+        return false;
+    for (i = 0; i < a->project.files[fi].sym_count; i++) {
+        int si = a->project.files[fi].sym_start + i;
+        Symbol *s = &a->project.syms[si];
+        int span;
+        if (s->kind != SYM_CLASS && s->kind != SYM_STRUCT &&
+            s->kind != SYM_UNION)
+            continue;
+        if (line < s->line || line > s->end_line)
+            continue;
+        span = s->end_line - s->line;
+        if (best < 0 || span < best_span) {
+            best = si;
+            best_span = span;
+        }
+    }
+    if (best < 0)
+        return false;
+    snprintf(out, out_size, "%s", a->project.syms[best].name);
+    return true;
+}
+
 static bool completion_member_type(App *a, const CompletionContext *ctx,
                                    char *out, size_t out_size)
 {
@@ -2612,7 +2643,14 @@ static bool completion_member_type(App *a, const CompletionContext *ctx,
         const char *name = b->data + segs[i].start;
         size_t len = (size_t)segs[i].len;
         if (i == n - 1) {
-            LocalVar *lv = find_local_var(a, ctx->line, name, len);
+            LocalVar *lv;
+            if (len == 4 && memcmp(name, "this", 4) == 0) {
+                if (!completion_enclosing_class(a, ctx->line, out,
+                                                out_size))
+                    return false;
+                continue;
+            }
+            lv = find_local_var(a, ctx->line, name, len);
             if (lv) {
                 if (lv->is_array)
                     return false;
@@ -2686,13 +2724,18 @@ void app_completion_update(App *a)
         }
         for (i = 0; i < members->count; i++) {
             ProjectMember *m = &members->items[i];
+            const char *detail;
             if (ctx.prefix_len > 0 &&
                 (strlen(m->name) < (size_t)ctx.prefix_len ||
                  memcmp(m->name, ctx.prefix, (size_t)ctx.prefix_len) != 0))
                 continue;
-            completion_item_add(a, m->name,
-                                m->type[0] ? m->type : m->signature,
-                                COMPLETE_GROUP_MEMBER);
+            if (m->is_type)
+                detail = "type";
+            else if (m->is_method || m->is_static)
+                detail = m->signature;
+            else
+                detail = m->type[0] ? m->type : m->signature;
+            completion_item_add(a, m->name, detail, COMPLETE_GROUP_MEMBER);
         }
     } else {
         completion_collect_locals(a, &ctx);

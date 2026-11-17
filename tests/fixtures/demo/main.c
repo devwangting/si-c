@@ -104,6 +104,30 @@ static int branch_alt(void) {
 #else
 static int branch_main(void) {
 #endif
-    return callback_target(1);
+    if (callback_target(1))
+        return 1;
+    return 0;
+}
+
+class BaseThing {
+public:
+    int base_value;
+    void base_method();
+};
+
+class Thing : public BaseThing {
+public:
+    int value;
+    static int count;
+    void method();
+    struct Inner { int z; };
+    int use_this() { return this->value; }
+};
+
+int thing_demo(void)
+{
+    Thing thing;
+    thing.value = 1;
+    return thing.use_this();
 }
 

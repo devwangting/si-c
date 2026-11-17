@@ -694,6 +694,32 @@ int main(int argc, char **argv)
             orig_scroll_line = b->scroll_line;
             orig_scroll_col = b->scroll_col;
 
+            move_after_anchor(&a, "thing.value = 1;");
+            type_text(&a, "thing.");
+            check(a.comp_active && a.comp_member &&
+                  completion_has(&a, "value") &&
+                  completion_has(&a, "base_value") &&
+                  completion_has(&a, "method") &&
+                  completion_has(&a, "base_method") &&
+                  completion_has(&a, "count") &&
+                  completion_has(&a, "Inner") &&
+                  completion_has(&a, "use_this"),
+                  "C++ class members include methods, static, nested, base");
+            key(&a, KEY_ESC, NULL);
+
+            move_after_anchor(&a, "thing.value = 1;");
+            type_text(&a, "thing.method.");
+            check(!a.comp_active, "method has no member chain");
+
+            move_after_anchor(&a, "return this->value;");
+            type_text(&a, "this->");
+            check(a.comp_active && a.comp_member &&
+                  completion_has(&a, "value") &&
+                  completion_has(&a, "method") &&
+                  completion_has(&a, "base_value"),
+                  "this-> lists current class and base members");
+            key(&a, KEY_ESC, NULL);
+
             move_after_anchor(&a, anchor);
             key(&a, KEY_ESC, NULL);
             check(a.comp_suppress, "Esc arms suppression without popup");
