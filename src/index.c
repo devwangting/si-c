@@ -1915,6 +1915,14 @@ static bool member_control_name(const char *src, const Tok *t, int i)
     return false;
 }
 
+static char *member_return_type(const char *src, const Tok *t, int start,
+                                int name)
+{
+    if (name <= start)
+        return xstrdup("");
+    return tok_range_text(src, t, start, name - 1);
+}
+
 static void process_member_statement(const char *src, const Tok *t, int n,
                                      int start, int end,
                                      ProjectMemberList *out)
@@ -2038,9 +2046,11 @@ static void process_member_statement(const char *src, const Tok *t, int n,
                    !member_control_name(src, t, lparen - 1)) {
             char *name_text =
                 tok_range_text(src, t, lparen - 1, lparen - 1);
+            char *ret = member_return_type(src, t, start, lparen - 1);
             char *signature = tok_range_text(src, t, start, end - 1);
-            member_list_add(out, name_text, "", signature, false, true,
+            member_list_add(out, name_text, ret, signature, false, true,
                             is_static, false);
+            free(ret);
             free(signature);
             free(name_text);
         }

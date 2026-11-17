@@ -500,7 +500,8 @@ static void test_project(const char *root)
         project_member_list_init(&members);
         check(project_aggregate_members(&p, "Thing", &members),
               "C++ class members found");
-        check(members.count == 8, "Thing has eight members including base");
+        check(members.count == 10,
+              "Thing has ten members including base and methods");
         m = find_member(&members, "base_value");
         check(m != NULL && !m->is_method && !m->is_static && !m->is_type &&
               strcmp(m->type, "int") == 0, "inherited base_value is data");
@@ -521,6 +522,13 @@ static void test_project(const char *root)
         check(m != NULL && m->is_type, "Thing.Inner is nested type");
         m = find_member(&members, "use_this");
         check(m != NULL && m->is_method, "inline method is indexed");
+        m = find_member(&members, "make_thing");
+        check(m != NULL && m->is_method && strstr(m->type, "Thing") != NULL,
+              "method return type is captured");
+        m = find_member(&members, "make_ptr");
+        check(m != NULL && m->is_method && strstr(m->type, "Thing") != NULL &&
+              strchr(m->type, '*') != NULL,
+              "pointer return type is captured");
         project_member_list_free(&members);
 
         project_member_list_init(&members);

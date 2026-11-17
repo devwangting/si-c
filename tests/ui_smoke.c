@@ -779,6 +779,29 @@ int main(int argc, char **argv)
                   "auto copy infers source variable type");
             key(&a, KEY_ESC, NULL);
 
+            move_after_anchor(&a, "made2.value = 3;");
+            type_text(&a, "made2.");
+            check(a.comp_active && a.comp_member &&
+                  completion_has(&a, "value") &&
+                  completion_has(&a, "method"),
+                  "auto method call infers return type");
+            key(&a, KEY_ESC, NULL);
+
+            move_after_anchor(&a, "made3->value = 4;");
+            type_text(&a, "made3->");
+            check(a.comp_active && a.comp_member &&
+                  completion_has(&a, "value"),
+                  "auto pointer method call infers pointee type");
+            key(&a, KEY_ESC, NULL);
+
+            move_after_anchor(&a, "made4.value = 5;");
+            type_text(&a, "made4.");
+            check(a.comp_active && a.comp_member &&
+                  completion_has(&a, "value") &&
+                  completion_has(&a, "method"),
+                  "auto free function call infers return type");
+            key(&a, KEY_ESC, NULL);
+
             move_after_anchor(&a, "box.item = 1;");
             type_text(&a, "box.");
             check(a.comp_active && a.comp_member &&

@@ -1784,6 +1784,185 @@ static LocalVar *find_local_var(App *a, int line, const char *name,
                                 size_t len);
 static bool completion_global_type(App *a, const char *name, size_t len,
                                    char *out, size_t out_size);
+static bool completion_enclosing_class(App *a, int line, char *out,
+                                       size_t out_size);
+static bool completion_type_name(App *a, const char *name, size_t len);
+static ProjectMemberList *completion_members(App *a, const char *type_text);
+static size_t completion_lower_bound(App *a, const char *prefix, size_t len);
+
+static bool auto_word_skip(const char **pp, const char *end, const char *word)
+{
+    const char *p = *pp;
+    size_t n = strlen(word);
+    if ((size_t)(end - p) < n || memcmp(p, word, n) != 0)
+        return false;
+    if (p + n < end &&
+        (isalnum((unsigned char)p[n]) || p[n] == '_'))
+        return false;
+    p += n;
+    while (p < end && (*p == ' ' || *p == '\t'))
+        p++;
+    *pp = p;
+    return true;
+}
+
+static bool signature_return_type(const char *signature, char *out,
+                                  size_t out_size)
+{
+    static const char *const storage[] = {
+        "static", "inline", "virtual", "extern", "explicit", "friend",
+        "constexpr", "consteval", "constinit", "mutable", "thread_local",
+        "register", "typedef"
+    };
+    char shortname[256];
+    char prefix[256];
+    const char *pos;
+    const char *p;
+    const char *end;
+    size_t n;
+    size_t i;
+
+    if (!signature || !out || out_size == 0)
+        return false;
+    out[0] = '\0';
+    if (!symbol_short_name(signature, shortname, sizeof(shortname)))
+        return false;
+    pos = strstr(signature, shortname);
+    if (!pos)
+        return false;
+    n = (size_t)(pos - signature);
+    if (n >= sizeof(prefix))
+        n = sizeof(prefix) - 1;
+    memcpy(prefix, signature, n);
+    prefix[n] = '\0';
+    p = prefix;
+    end = prefix + strlen(prefix);
+    for (;;) {
+        while (p < end && (*p == ' ' || *p == '\t'))
+            p++;
+        if (p >= end)
+            break;
+        if (*p == '#') {
+            char directive[16];
+            size_t dn = 0;
+            p++;
+            while (p < end && (*p == ' ' || *p == '\t'))
+                p++;
+            while (p < end && (isalnum((unsigned char)*p) || *p == '_') &&
+                   dn + 1 < sizeof(directive))
+                directive[dn++] = *p++;
+            directive[dn] = '\0';
+            while (p < end && (*p == ' ' || *p == '\t'))
+                p++;
+            if (strcmp(directive, "ifdef") == 0 ||
+                strcmp(directive, "ifndef") == 0 ||
+                strcmp(directive, "define") == 0 ||
+                strcmp(directive, "undef") == 0) {
+                while (p < end && (isalnum((unsigned char)*p) ||
+                                   *p == '_'))
+                    p++;
+            } else if (strcmp(directive, "if") == 0 ||
+                       strcmp(directive, "elif") == 0) {
+                if (auto_word_skip(&p, end, "defined")) {
+                    if (p < end && *p == '(') {
+                        int depth = 0;
+                        while (p < end) {
+                            if (*p == '(')
+                                depth++;
+                            else if (*p == ')' && --depth == 0) {
+                                p++;
+                                break;
+                            }
+                            p++;
+                        }
+                    } else {
+                        while (p < end && (isalnum((unsigned char)*p) ||
+                                           *p == '_'))
+                            p++;
+                    }
+                } else {
+                    while (p < end && *p != ' ')
+                        p++;
+                }
+            }
+            while (p < end && (*p == ' ' || *p == '\t'))
+                p++;
+            continue;
+        }
+        if (auto_word_skip(&p, end, "template")) {
+            int depth = 0;
+            while (p < end) {
+                if (*p == '<')
+                    depth++;
+                else if (*p == '>' && depth > 0)
+                    depth--;
+                p++;
+                if (depth == 0)
+                    break;
+            }
+            continue;
+        }
+        {
+            const char *word = p;
+            bool skipped = false;
+            while (p < end && (isalnum((unsigned char)*p) || *p == '_'))
+                p++;
+            if (p > word) {
+                size_t wlen = (size_t)(p - word);
+                for (i = 0; i < SI_ARRAY_LEN(storage); i++) {
+                    if (strlen(storage[i]) == wlen &&
+                        memcmp(storage[i], word, wlen) == 0) {
+                        skipped = true;
+                        break;
+                    }
+                }
+            }
+            if (skipped) {
+                while (p < end && (*p == ' ' || *p == '\t'))
+                    p++;
+                continue;
+            }
+            p = word;
+            break;
+        }
+    }
+    while (p < end && (*p == ' ' || *p == '\t'))
+        p++;
+    while (end > p && (end[-1] == ' ' || end[-1] == '\t'))
+        end--;
+    n = (size_t)(end - p);
+    if (n == 0)
+        return false;
+    if (n >= out_size)
+        n = out_size - 1;
+    memcpy(out, p, n);
+    out[n] = '\0';
+    return out[0] != '\0';
+}
+
+static bool completion_function_return_type(App *a, const char *name,
+                                            size_t len, char *out,
+                                            size_t out_size)
+{
+    size_t lo;
+    size_t i;
+
+    if (!a->sym_name_index || a->sym_name_count == 0)
+        return false;
+    lo = completion_lower_bound(a, name, len);
+    for (i = lo; i < a->sym_name_count; i++) {
+        Symbol *s = a->sym_name_index[i];
+        if (strncmp(s->name, name, len) != 0)
+            break;
+        if (strlen(s->name) != len)
+            continue;
+        if (s->kind != SYM_FUNCTION && s->kind != SYM_PROTOTYPE)
+            continue;
+        if (signature_return_type(s->signature, out, out_size))
+            return true;
+    }
+    return false;
+}
 
 static bool auto_var_type(App *a, int line, const char *name, size_t len,
                           char *out, size_t out_size)
@@ -1794,6 +1973,90 @@ static bool auto_var_type(App *a, int line, const char *name, size_t len,
         return true;
     }
     return completion_global_type(a, name, len, out, out_size);
+}
+
+static bool auto_member_call_type(App *a, int line, Buffer *b, size_t p,
+                                  size_t end, char *out, size_t out_size)
+{
+    char recv[128];
+    char method[128];
+    char type[256];
+    size_t recv_start = p;
+    size_t recv_end;
+    size_t method_start;
+    size_t method_end;
+    ProjectMemberList *members;
+    ProjectMember *m = NULL;
+    size_t i;
+    bool scope = false;
+
+    if (!b || p >= end ||
+        !(isalpha((unsigned char)b->data[p]) || b->data[p] == '_'))
+        return false;
+    while (p < end && (isalnum((unsigned char)b->data[p]) ||
+                       b->data[p] == '_'))
+        p++;
+    recv_end = p;
+    while (p < end && (b->data[p] == ' ' || b->data[p] == '\t'))
+        p++;
+    if (p + 1 < end && b->data[p] == ':' && b->data[p + 1] == ':') {
+        scope = true;
+        p += 2;
+    } else if (p < end && b->data[p] == '.') {
+        p++;
+    } else if (p + 1 < end && b->data[p] == '-' && b->data[p + 1] == '>') {
+        p += 2;
+    } else {
+        return false;
+    }
+    while (p < end && (b->data[p] == ' ' || b->data[p] == '\t'))
+        p++;
+    method_start = p;
+    while (p < end && (isalnum((unsigned char)b->data[p]) ||
+                       b->data[p] == '_'))
+        p++;
+    method_end = p;
+    while (p < end && (b->data[p] == ' ' || b->data[p] == '\t'))
+        p++;
+    if (p >= end || b->data[p] != '(' || method_end == method_start)
+        return false;
+    {
+        size_t n = recv_end - recv_start;
+        if (n >= sizeof(recv))
+            n = sizeof(recv) - 1;
+        memcpy(recv, b->data + recv_start, n);
+        recv[n] = '\0';
+        n = method_end - method_start;
+        if (n >= sizeof(method))
+            n = sizeof(method) - 1;
+        memcpy(method, b->data + method_start, n);
+        method[n] = '\0';
+    }
+    if (strcmp(recv, "this") == 0) {
+        if (!completion_enclosing_class(a, line, type, sizeof(type)))
+            return false;
+    } else if (scope) {
+        if (!completion_type_name(a, recv, strlen(recv)))
+            return false;
+        snprintf(type, sizeof(type), "%s", recv);
+    } else if (!auto_var_type(a, line, recv, strlen(recv), type,
+                              sizeof(type))) {
+        return false;
+    }
+    members = completion_members(a, type);
+    if (!members)
+        return false;
+    for (i = 0; i < members->count; i++) {
+        ProjectMember *cand = &members->items[i];
+        if (strcmp(cand->name, method) == 0) {
+            m = cand;
+            break;
+        }
+    }
+    if (!m || !m->is_method || !m->type[0])
+        return false;
+    snprintf(out, out_size, "%s", m->type);
+    return true;
 }
 
 static bool auto_decorate(char *out, size_t out_size, bool is_ptr,
@@ -1921,14 +2184,38 @@ static bool auto_infer_type(App *a, Buffer *b, int line, size_t start,
             while (q < end && (b->data[q] == ' ' || b->data[q] == '\t'))
                 q++;
             if (q < end && (b->data[q] == '(' || b->data[q] == '{')) {
+                if (b->data[q] == '{' ||
+                    completion_type_name(a, type, strlen(type))) {
+                    snprintf(out, out_size, "%s", type);
+                    return auto_decorate(out, out_size, is_ptr, is_ref);
+                }
+                {
+                    char ret[256];
+                    if (completion_function_return_type(a, type,
+                                                        strlen(type), ret,
+                                                        sizeof(ret))) {
+                        snprintf(out, out_size, "%s", ret);
+                        return auto_decorate(out, out_size, is_ptr,
+                                             is_ref);
+                    }
+                }
                 snprintf(out, out_size, "%s", type);
                 return auto_decorate(out, out_size, is_ptr, is_ref);
             }
             if (q < end &&
                 (b->data[q] == '.' ||
                  (b->data[q] == '-' && q + 1 < end &&
-                  b->data[q + 1] == '>')))
+                  b->data[q + 1] == '>') ||
+                 (b->data[q] == ':' && q + 1 < end &&
+                  b->data[q + 1] == ':'))) {
+                char call_type[256];
+                if (auto_member_call_type(a, line, b, p, end, call_type,
+                                          sizeof(call_type))) {
+                    snprintf(out, out_size, "%s", call_type);
+                    return auto_decorate(out, out_size, is_ptr, is_ref);
+                }
                 return false;
+            }
         }
         while (after < end &&
                (isalnum((unsigned char)b->data[after]) ||

@@ -123,6 +123,8 @@ public:
     void method();
     struct Inner { int z; static int inner_count; void inner_method(); };
     int use_this() { return this->value; }
+    Thing make_thing();
+    Thing *make_ptr();
 };
 
 namespace demo_ns {
@@ -137,6 +139,10 @@ public:
 static void Thing::static_method() {}
 void Thing::method() {}
 int Thing::count = 0;
+Thing Thing::make_thing() { return Thing(); }
+Thing *Thing::make_ptr() { return 0; }
+Thing make_global_thing(void);
+Thing make_global_thing(void) { return Thing(); }
 void demo_ns::NsThing::ns_method() {}
 
 using AliasThing = Thing;
@@ -178,8 +184,15 @@ int auto_demo(void)
     auto copy = made;
     auto *ptr = &made;
     auto &ref = made;
+    auto made2 = made.make_thing();
+    auto *made3 = made.make_ptr();
+    auto made4 = make_global_thing();
     made.value = 2;
-    return ptr->value + ref.value + copy.value;
+    made2.value = 3;
+    made3->value = 4;
+    made4.value = 5;
+    return ptr->value + ref.value + copy.value + made2.value +
+           made3->value + made4.value;
 }
 
 template <typename T>
