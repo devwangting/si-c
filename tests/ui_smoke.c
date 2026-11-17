@@ -819,6 +819,14 @@ int main(int argc, char **argv)
                   "using alias lists target class members");
             key(&a, KEY_ESC, NULL);
 
+            move_after_anchor(&a, "cthing.value = 6;");
+            type_text(&a, "cthing.");
+            check(a.comp_active && a.comp_member &&
+                  completion_has(&a, "value") &&
+                  completion_has(&a, "method"),
+                  "constexpr local lists class members");
+            key(&a, KEY_ESC, NULL);
+
             move_after_anchor(&a, anchor);
             key(&a, KEY_ESC, NULL);
             check(a.comp_suppress, "Esc arms suppression without popup");

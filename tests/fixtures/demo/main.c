@@ -210,3 +210,10 @@ int template_demo(void)
     return box.item;
 }
 
+int constexpr_demo(void)
+{
+    constexpr Thing cthing{};
+    cthing.value = 6;
+    return cthing.value;
+}
+

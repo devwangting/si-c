@@ -1641,7 +1641,8 @@ static bool local_type_word(App *a, const char *prefix, size_t len)
 {
     static const char *const storage[] = {
         "const", "volatile", "static", "extern", "register", "auto",
-        "restrict", "inline", "typedef"
+        "restrict", "inline", "typedef", "constexpr", "consteval",
+        "constinit", "thread_local", "mutable"
     };
     static const char *const base[] = {
         "void", "char", "int", "float", "double", "_Bool", "bool",
@@ -1692,7 +1693,8 @@ static bool local_word_is_type(App *a, const char *word, size_t len)
         "const", "volatile", "static", "extern", "register", "auto",
         "restrict", "inline", "typedef", "unsigned", "signed", "short",
         "long", "void", "char", "int", "float", "double", "_Bool", "bool",
-        "size_t", "ssize_t", "FILE", "struct", "union", "enum", "class"
+        "size_t", "ssize_t", "FILE", "struct", "union", "enum", "class",
+        "constexpr", "consteval", "constinit", "thread_local", "mutable"
     };
     size_t i;
     for (i = 0; i < SI_ARRAY_LEN(words); i++) {
