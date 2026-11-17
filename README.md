@@ -50,10 +50,11 @@ third-party runtime dependencies, and is AI-generated. See
 - **编辑能力**：UTF-8、撤销/重做、自动缩进、Tab 转空格、查找、鼠标拖选、
   `Ctrl+C` / `Ctrl+V`、OSC52 终端剪贴板。
 - **变量补全**：输入标识符时自动列出当前函数局部变量/参数、全局变量、函数、
-  宏、类型和关键字；输入 `.` / `->` 列出结构体/类成员并支持链式访问。
-  C++ 类成员包括数据成员、成员函数、静态成员和嵌套类型，继承成员和
-  `this->` 也能列出；Tab/Enter 接受，Esc 放弃当前词；鼠标单击高亮、
-  双击接受、滚轮滚动。
+  宏、类型和关键字；输入 `.` / `->` 列出结构体/类成员并支持链式访问，
+  输入 `::` 列出类的静态成员、成员函数和嵌套类型，支持
+  `Thing::Inner::` 和 `demo_ns::NsThing::` 这类限定名。C++ 类成员包括
+  数据成员、成员函数、静态成员和嵌套类型，继承成员和 `this->` 也能列出；
+  Tab/Enter 接受，Esc 放弃当前词；鼠标单击高亮、双击接受、滚轮滚动。
 - **代码整理**：`F6`，内置 `astyle --style=ansi` 风格整理，保护预处理行。
 - **变量高亮**：`F8` 高亮当前变量在可见区域和 CODE 面板中的所有同名出现。
 - **主题与鼠标**：深色/浅色主题，SGR 鼠标点击、拖选、滚轮、四条可拖动分隔条。
@@ -393,9 +394,9 @@ make clean && make -j && make test
 结果：
 
 ```text
-test_core: 128 checks, 0 failures
-test_keys:  26 checks, 0 failures
-ui_smoke:  155 checks, 0 failures
+test_core: 276 checks, 0 failures
+test_keys:  30 checks, 0 failures
+ui_smoke:  305 checks, 0 failures
 ```
 
 macOS 的 `test_keys` 还包含 Option 键用例，检查数量会与本机不同。
@@ -408,7 +409,8 @@ Linux 使用同一套 POSIX 代码路径；建议首次在 Linux 上执行
 
 ## 已知限制
 
-- 解析器是启发式的，不展开宏，不处理模板实例化、继承关系、重载解析。
+- 解析器是启发式的，不展开宏，不处理模板实例化、完整继承图和重载解析；
+  类成员补全只合并能从 `class X : public Base` 直接读到的基类成员。
 - 引用搜索不会进入 `#define` 宏体；`#if`/`#else` 的所有分支都会被扫描。
 - “查找引用”、调用关系和全项目文本搜索读取**磁盘文件**，不包含未保存修改。
 - 文件大纲不会在每次按键后重解析；保存、重开或 `F5` 后更新。

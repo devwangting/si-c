@@ -442,7 +442,7 @@ static void test_project(const char *root)
         project_member_list_init(&members);
         check(project_aggregate_members(&p, "Thing", &members),
               "C++ class members found");
-        check(members.count == 7, "Thing has seven members including base");
+        check(members.count == 8, "Thing has eight members including base");
         m = find_member(&members, "base_value");
         check(m != NULL && !m->is_method && !m->is_static && !m->is_type &&
               strcmp(m->type, "int") == 0, "inherited base_value is data");
@@ -454,12 +454,39 @@ static void test_project(const char *root)
         m = find_member(&members, "count");
         check(m != NULL && m->is_static && !m->is_method,
               "Thing.count is static data");
+        m = find_member(&members, "static_method");
+        check(m != NULL && m->is_static && m->is_method,
+              "Thing.static_method is static method");
         m = find_member(&members, "method");
         check(m != NULL && m->is_method, "Thing.method is method");
         m = find_member(&members, "Inner");
         check(m != NULL && m->is_type, "Thing.Inner is nested type");
         m = find_member(&members, "use_this");
         check(m != NULL && m->is_method, "inline method is indexed");
+        project_member_list_free(&members);
+
+        project_member_list_init(&members);
+        check(project_aggregate_members(&p, "Inner", &members),
+              "nested type members found");
+        m = find_member(&members, "z");
+        check(m != NULL && !m->is_method, "Inner.z is data");
+        m = find_member(&members, "inner_count");
+        check(m != NULL && m->is_static && !m->is_method,
+              "Inner.inner_count is static data");
+        m = find_member(&members, "inner_method");
+        check(m != NULL && m->is_method, "Inner.inner_method is method");
+        project_member_list_free(&members);
+
+        project_member_list_init(&members);
+        check(project_aggregate_members(&p, "NsThing", &members),
+              "namespace class members found");
+        m = find_member(&members, "ns_value");
+        check(m != NULL && !m->is_method, "NsThing.ns_value is data");
+        m = find_member(&members, "ns_count");
+        check(m != NULL && m->is_static && !m->is_method,
+              "NsThing.ns_count is static data");
+        m = find_member(&members, "ns_method");
+        check(m != NULL && m->is_method, "NsThing.ns_method is method");
         project_member_list_free(&members);
 
         project_member_list_init(&members);

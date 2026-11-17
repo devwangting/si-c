@@ -720,6 +720,36 @@ int main(int argc, char **argv)
                   "this-> lists current class and base members");
             key(&a, KEY_ESC, NULL);
 
+            move_after_anchor(&a, "thing.value = 1;");
+            type_text(&a, "Thing::");
+            check(a.comp_active && a.comp_member &&
+                  completion_has(&a, "count") &&
+                  completion_has(&a, "static_method") &&
+                  completion_has(&a, "method") &&
+                  completion_has(&a, "Inner") &&
+                  !completion_has(&a, "value") &&
+                  !completion_has(&a, "base_value"),
+                  "Thing:: lists static data, methods and nested types");
+            key(&a, KEY_ESC, NULL);
+
+            move_after_anchor(&a, "thing.value = 1;");
+            type_text(&a, "Thing::Inner::");
+            check(a.comp_active && a.comp_member &&
+                  completion_has(&a, "inner_count") &&
+                  completion_has(&a, "inner_method") &&
+                  !completion_has(&a, "z"),
+                  "Thing::Inner:: lists nested static and method members");
+            key(&a, KEY_ESC, NULL);
+
+            move_after_anchor(&a, "thing.value = 1;");
+            type_text(&a, "demo_ns::NsThing::");
+            check(a.comp_active && a.comp_member &&
+                  completion_has(&a, "ns_count") &&
+                  completion_has(&a, "ns_method") &&
+                  !completion_has(&a, "ns_value"),
+                  "namespace-qualified type lists scope members");
+            key(&a, KEY_ESC, NULL);
+
             move_after_anchor(&a, anchor);
             key(&a, KEY_ESC, NULL);
             check(a.comp_suppress, "Esc arms suppression without popup");

@@ -119,10 +119,25 @@ class Thing : public BaseThing {
 public:
     int value;
     static int count;
+    static void static_method();
     void method();
-    struct Inner { int z; };
+    struct Inner { int z; static int inner_count; void inner_method(); };
     int use_this() { return this->value; }
 };
+
+namespace demo_ns {
+class NsThing {
+public:
+    int ns_value;
+    static int ns_count;
+    void ns_method();
+};
+}
+
+static void Thing::static_method() {}
+void Thing::method() {}
+int Thing::count = 0;
+void demo_ns::NsThing::ns_method() {}
 
 int thing_demo(void)
 {

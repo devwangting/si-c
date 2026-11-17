@@ -1921,6 +1921,7 @@ bool app_local_in_scope(App *a, int line, const char *name, size_t len)
 
 typedef struct {
     bool member;
+    bool scope_access;
     int line;
     int word_start;
     int word_end;
@@ -2233,11 +2234,16 @@ static bool completion_context(App *a, CompletionContext *ctx)
     while (p > line_start &&
            (b->data[p - 1] == ' ' || b->data[p - 1] == '\t'))
         p--;
-    if (p > line_start && b->data[p - 1] == '.')
+    if (p >= line_start + 2 && b->data[p - 1] == ':' &&
+        b->data[p - 2] == ':') {
         ctx->member = true;
-    else if (p >= line_start + 2 && b->data[p - 1] == '>' &&
-             b->data[p - 2] == '-')
+        ctx->scope_access = true;
+    } else if (p > line_start && b->data[p - 1] == '.') {
         ctx->member = true;
+    } else if (p >= line_start + 2 && b->data[p - 1] == '>' &&
+               b->data[p - 2] == '-') {
+        ctx->member = true;
+    }
     if (ctx->prefix_len == 0 && !ctx->member)
         return false;
     if (ctx->prefix_len > (int)sizeof(ctx->prefix) - 1)
@@ -2548,6 +2554,47 @@ static bool completion_global_type(App *a, const char *name, size_t len,
     return false;
 }
 
+static bool completion_has_kind(App *a, const char *name, size_t len,
+                                bool types, bool namespaces)
+{
+    size_t lo;
+    size_t i;
+    int fi = app_active_file_index(a);
+    bool found = false;
+
+    if (!a->sym_name_index || a->sym_name_count == 0)
+        return false;
+    lo = completion_lower_bound(a, name, len);
+    for (i = lo; i < a->sym_name_count; i++) {
+        Symbol *s = a->sym_name_index[i];
+        bool match;
+        if (strncmp(s->name, name, len) != 0)
+            break;
+        if (strlen(s->name) != len)
+            continue;
+        match = (types &&
+                 (s->kind == SYM_CLASS || s->kind == SYM_STRUCT ||
+                  s->kind == SYM_UNION || s->kind == SYM_TYPEDEF)) ||
+                (namespaces && s->kind == SYM_NAMESPACE);
+        if (!match)
+            continue;
+        if (s->file_index == fi)
+            return true;
+        found = true;
+    }
+    return found;
+}
+
+static bool completion_type_name(App *a, const char *name, size_t len)
+{
+    return completion_has_kind(a, name, len, true, false);
+}
+
+static bool completion_namespace_name(App *a, const char *name, size_t len)
+{
+    return completion_has_kind(a, name, len, false, true);
+}
+
 static bool completion_enclosing_class(App *a, int line, char *out,
                                        size_t out_size)
 {
@@ -2586,11 +2633,15 @@ static bool completion_member_type(App *a, const CompletionContext *ctx,
     struct {
         int start;
         int len;
+        bool scope_after;
     } segs[16];
     int n = 0;
     int line_start;
     int p;
     int i;
+    int access;
+    bool have_type = false;
+    bool namespace_seen = false;
 
     if (!b)
         return false;
@@ -2599,11 +2650,17 @@ static bool completion_member_type(App *a, const CompletionContext *ctx,
     while (p > line_start &&
            (b->data[p - 1] == ' ' || b->data[p - 1] == '\t'))
         p--;
-    if (p > line_start && b->data[p - 1] == '.') {
+    if (p >= line_start + 2 && b->data[p - 1] == ':' &&
+        b->data[p - 2] == ':') {
+        p -= 2;
+        access = 2;
+    } else if (p > line_start && b->data[p - 1] == '.') {
         p--;
+        access = 0;
     } else if (p >= line_start + 2 && b->data[p - 1] == '>' &&
                b->data[p - 2] == '-') {
         p -= 2;
+        access = 1;
     } else {
         return false;
     }
@@ -2622,44 +2679,84 @@ static bool completion_member_type(App *a, const CompletionContext *ctx,
             return false;
         segs[n].start = p;
         segs[n].len = end - p;
+        segs[n].scope_after = access == 2;
         n++;
         while (p > line_start &&
                (b->data[p - 1] == ' ' || b->data[p - 1] == '\t'))
             p--;
+        if (p >= line_start + 2 && b->data[p - 1] == ':' &&
+            b->data[p - 2] == ':') {
+            p -= 2;
+            access = 2;
+            continue;
+        }
         if (p > line_start && b->data[p - 1] == '.') {
             p--;
+            access = 0;
             continue;
         }
         if (p >= line_start + 2 && b->data[p - 1] == '>' &&
             b->data[p - 2] == '-') {
             p -= 2;
+            access = 1;
             continue;
         }
         break;
     }
     if (n == 0)
         return false;
+    out[0] = '\0';
     for (i = n - 1; i >= 0; i--) {
         const char *name = b->data + segs[i].start;
         size_t len = (size_t)segs[i].len;
         if (i == n - 1) {
-            LocalVar *lv;
             if (len == 4 && memcmp(name, "this", 4) == 0) {
                 if (!completion_enclosing_class(a, ctx->line, out,
                                                 out_size))
                     return false;
+                have_type = true;
                 continue;
             }
-            lv = find_local_var(a, ctx->line, name, len);
-            if (lv) {
-                if (lv->is_array)
+            if (segs[i].scope_after) {
+                if (completion_type_name(a, name, len)) {
+                    snprintf(out, out_size, "%.*s", (int)len, name);
+                    have_type = true;
+                    namespace_seen = false;
+                } else if (completion_namespace_name(a, name, len)) {
+                    have_type = false;
+                    namespace_seen = true;
+                } else {
                     return false;
-                snprintf(out, out_size, "%s", lv->type);
-            } else if (!completion_global_type(a, name, len, out,
-                                               out_size)) {
+                }
+            } else {
+                LocalVar *lv = find_local_var(a, ctx->line, name, len);
+                if (lv) {
+                    if (lv->is_array)
+                        return false;
+                    snprintf(out, out_size, "%s", lv->type);
+                    have_type = true;
+                } else if (completion_global_type(a, name, len, out,
+                                                   out_size)) {
+                    have_type = true;
+                } else {
+                    return false;
+                }
+            }
+            continue;
+        }
+        if (!have_type) {
+            if (!namespace_seen)
+                return false;
+            if (completion_type_name(a, name, len)) {
+                snprintf(out, out_size, "%.*s", (int)len, name);
+                have_type = true;
+                namespace_seen = false;
+            } else if (!completion_namespace_name(a, name, len)) {
                 return false;
             }
-        } else {
+            continue;
+        }
+        {
             ProjectMemberList *members = completion_members(a, out);
             ProjectMember *m = NULL;
             size_t j;
@@ -2673,12 +2770,18 @@ static bool completion_member_type(App *a, const CompletionContext *ctx,
                     break;
                 }
             }
-            if (!m || !m->type[0] || m->is_array)
+            if (!m)
                 return false;
-            snprintf(out, out_size, "%s", m->type);
+            if (m->is_type) {
+                snprintf(out, out_size, "%s", m->name);
+            } else if (m->type[0] && !m->is_array) {
+                snprintf(out, out_size, "%s", m->type);
+            } else {
+                return false;
+            }
         }
     }
-    return out[0] != '\0';
+    return have_type && out[0] != '\0';
 }
 
 void app_completion_update(App *a)
@@ -2725,6 +2828,9 @@ void app_completion_update(App *a)
         for (i = 0; i < members->count; i++) {
             ProjectMember *m = &members->items[i];
             const char *detail;
+            if (ctx.scope_access && !m->is_method && !m->is_static &&
+                !m->is_type)
+                continue;
             if (ctx.prefix_len > 0 &&
                 (strlen(m->name) < (size_t)ctx.prefix_len ||
                  memcmp(m->name, ctx.prefix, (size_t)ctx.prefix_len) != 0))
