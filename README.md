@@ -126,6 +126,16 @@ Makefile 会在 macOS 上自动追加 `-D_DARWIN_C_SOURCE`。如果手动指定
 `CPPFLAGS`，请保留 `-D_POSIX_C_SOURCE=200809L -D_DARWIN_C_SOURCE -Isrc`。
 支持 Intel 与 Apple Silicon；仓库中的安装包构建使用 Universal 二进制。
 
+### 安装到系统
+
+```sh
+./install.sh                          # 构建并安装到 /usr/local/bin/si
+PREFIX=$HOME/.local ./install.sh      # 安装到用户目录
+```
+
+脚本会先构建，再按需调用 `sudo` 写入目标目录；非交互环境可以设置
+`SUDO_PASSWORD`。安装后可以在任意目录直接运行 `si`。
+
 ### 打开项目
 
 ```sh
