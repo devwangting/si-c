@@ -24,7 +24,7 @@
 - Makefile 的 `%.o: %.c` 不跟踪头文件依赖：改过 `.h` 后执行 `make clean && make -j`，否则可能链接旧对象。
 - 新增 `.c` 时必须同时加入 Makefile 的 `SRC`，以及测试所需的 `CORE` / `UI_CORE`，否则主程序或测试会漏符号。
 - 编译选项是 `-std=c11 -Wall -Wextra -Wpedantic`；当前 GCC 下已有少量 `-Wformat-truncation` 警告（`util.c` / `render.c` / `app.c`），目标是不要新增警告。
-- Linux 当前实测：test_core 292、test_keys 30、ui_smoke 305。`test_keys` 的 macOS Option 用例在 `#if defined(__APPLE__)` 内，数量会与本机不同。
+- Linux 当前实测：test_core 293、test_keys 30、ui_smoke 313。`test_keys` 的 macOS Option 用例在 `#if defined(__APPLE__)` 内，数量会与本机不同。
 
 ## 运行时主流程
 
@@ -53,7 +53,7 @@
 ## 修改指引
 
 - 加 UI 功能：`App` 字段放 `app.h` → 按键/动作放 `app.c` → 绘制放 `render.c` → 在 `tests/ui_smoke.c` 用 `app_handle_key_event()` / `app_handle_mouse_event()` 加覆盖。测试可用 `force_rows` / `force_cols` 固定布局。
-- 改变量补全：`app.c` 的 `/* --- Completion --- */` 分节负责上下文、候选、接受和抑制；`render.c:draw_completion()` 画浮层；`index.c` 的 `project_type_aggregate_key()` / `project_aggregate_members()` 解析成员。`.` / `->` 走实例成员链，`::` 走类型/命名空间限定链（只列静态数据、成员函数、嵌套类型）；`this->` 和继承成员已支持。`app_rebuild_globals()` 重建按名字排序的符号指针索引并清空成员缓存；项目重载/F5 后缓存自动失效。
+- 改变量补全：`app.c` 的 `/* --- Completion --- */` 分节负责上下文、候选、接受和抑制；`render.c:draw_completion()` 画浮层；`index.c` 的 `project_type_aggregate_key()` / `project_aggregate_members()` 解析成员。`.` / `->` 走实例成员链，`::` 走类型/命名空间限定链（只列静态数据、成员函数、嵌套类型）；`this->` 和继承成员已支持。局部变量表由 `app_rebuild_locals()` 建立，`auto` 会从构造表达式、变量复制、取地址/引用和常见字面量推断。`app_rebuild_globals()` 重建按名字排序的符号指针索引并清空成员缓存；项目重载/F5 后缓存自动失效。
 - 改索引/符号：同步 `index.c` + `index.h` + `test_core`；若改了缓存布局，提升版本号。补全新增的全局变量符号不改变 `.si-index` 格式，但旧缓存需要 F5 才能看到。
 - 改终端按键/鼠标：`term.c` + `term.h` + `test_keys`；macOS 的 Option 符号映射在 `term.c:mac_option_base_key()`。
 - 改启动/最近项目：`util.c` 的 `state_*` + `app.c` 的 `app_project_picker_*` / `app_recent_touch()` + `render.c:draw_project_picker()`；`test_core` 覆盖状态历史，`ui_smoke` 覆盖列表交互。

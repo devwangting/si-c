@@ -1703,6 +1703,247 @@ static bool local_word_is_type(App *a, const char *word, size_t len)
     return strlist_contains_n(&a->types, word, len);
 }
 
+static bool type_has_auto(const char *type)
+{
+    const char *p = type;
+    while (*p) {
+        const char *start;
+        while (*p && !(isalpha((unsigned char)*p) || *p == '_'))
+            p++;
+        if (!*p)
+            break;
+        start = p;
+        while (isalnum((unsigned char)*p) || *p == '_')
+            p++;
+        if (p - start == 4 && memcmp(start, "auto", 4) == 0)
+            return true;
+    }
+    return false;
+}
+
+static bool buf_word_is(const Buffer *b, size_t pos, size_t end,
+                        const char *word)
+{
+    size_t n = strlen(word);
+    return pos + n <= end && memcmp(b->data + pos, word, n) == 0 &&
+           (pos + n == end ||
+            !(isalnum((unsigned char)b->data[pos + n]) ||
+              b->data[pos + n] == '_'));
+}
+
+static bool auto_type_expr(Buffer *b, size_t start, size_t end,
+                           size_t *after, char *out, size_t out_size)
+{
+    size_t p = start;
+    size_t last = start;
+    int angle = 0;
+
+    if (start >= end ||
+        !(isalpha((unsigned char)b->data[start]) || b->data[start] == '_'))
+        return false;
+    while (p < end) {
+        char c = b->data[p];
+        if (isalnum((unsigned char)c) || c == '_') {
+            p++;
+            last = p;
+        } else if (c == ':' && p + 1 < end && b->data[p + 1] == ':') {
+            p += 2;
+            last = p;
+        } else if (c == '<') {
+            angle++;
+            p++;
+            last = p;
+        } else if (c == '>' && angle > 0) {
+            angle--;
+            p++;
+            last = p;
+        } else if ((c == ' ' || c == '\t') && angle > 0) {
+            p++;
+        } else {
+            break;
+        }
+    }
+    while (last > start &&
+           (b->data[last - 1] == ' ' || b->data[last - 1] == '\t'))
+        last--;
+    if (last == start)
+        return false;
+    {
+        size_t n = last - start;
+        if (n >= out_size)
+            n = out_size - 1;
+        memcpy(out, b->data + start, n);
+        out[n] = '\0';
+    }
+    if (after)
+        *after = p;
+    return out[0] != '\0';
+}
+
+static LocalVar *find_local_var(App *a, int line, const char *name,
+                                size_t len);
+static bool completion_global_type(App *a, const char *name, size_t len,
+                                   char *out, size_t out_size);
+
+static bool auto_var_type(App *a, int line, const char *name, size_t len,
+                          char *out, size_t out_size)
+{
+    LocalVar *lv = find_local_var(a, line, name, len);
+    if (lv) {
+        snprintf(out, out_size, "%s", lv->type);
+        return true;
+    }
+    return completion_global_type(a, name, len, out, out_size);
+}
+
+static bool auto_decorate(char *out, size_t out_size, bool is_ptr,
+                          bool is_ref)
+{
+    if (is_ref || is_ptr) {
+        size_t n = strlen(out);
+        if (is_ref && n + 2 < out_size)
+            snprintf(out + n, out_size - n, " &");
+        else if (is_ptr && n + 2 < out_size &&
+                 (n == 0 || out[n - 1] != '*'))
+            snprintf(out + n, out_size - n, " *");
+    }
+    return true;
+}
+
+static bool auto_infer_type(App *a, Buffer *b, int line, size_t start,
+                            size_t end, const char *decl_type,
+                            char *out, size_t out_size)
+{
+    size_t p = start;
+    bool is_ptr = strchr(decl_type, '*') != NULL;
+    bool is_ref = strchr(decl_type, '&') != NULL;
+    char type[256];
+
+    if (!b || start >= end || out_size == 0)
+        return false;
+    out[0] = '\0';
+    while (p < end && (b->data[p] == ' ' || b->data[p] == '\t'))
+        p++;
+    if (p >= end || b->data[p] != '=')
+        return false;
+    p++;
+    while (p < end && (b->data[p] == ' ' || b->data[p] == '\t'))
+        p++;
+    if (p >= end)
+        return false;
+    if (buf_word_is(b, p, end, "new")) {
+        p += 3;
+        while (p < end && (b->data[p] == ' ' || b->data[p] == '\t'))
+            p++;
+        is_ptr = true;
+    } else if (buf_word_is(b, p, end, "static_cast") ||
+               buf_word_is(b, p, end, "reinterpret_cast") ||
+               buf_word_is(b, p, end, "const_cast") ||
+               buf_word_is(b, p, end, "dynamic_cast")) {
+        while (p < end && (isalnum((unsigned char)b->data[p]) ||
+                           b->data[p] == '_'))
+            p++;
+        while (p < end && (b->data[p] == ' ' || b->data[p] == '\t'))
+            p++;
+        if (p < end && b->data[p] == '<') {
+            size_t type_start = ++p;
+            int depth = 1;
+            while (p < end && depth > 0) {
+                if (b->data[p] == '<')
+                    depth++;
+                else if (b->data[p] == '>' && --depth == 0)
+                    break;
+                p++;
+            }
+            while (p > type_start &&
+                   (b->data[p - 1] == ' ' || b->data[p - 1] == '\t'))
+                p--;
+            if (p > type_start) {
+                size_t n = p - type_start;
+                if (n >= sizeof(type))
+                    n = sizeof(type) - 1;
+                memcpy(type, b->data + type_start, n);
+                type[n] = '\0';
+                snprintf(out, out_size, "%s", type);
+                return true;
+            }
+        }
+        return false;
+    }
+    if (b->data[p] == '&') {
+        is_ptr = true;
+        p++;
+        while (p < end && (b->data[p] == ' ' || b->data[p] == '\t'))
+            p++;
+    } else if (b->data[p] == '*') {
+        p++;
+        while (p < end && (b->data[p] == ' ' || b->data[p] == '\t'))
+            p++;
+    }
+    if (p >= end)
+        return false;
+    if (b->data[p] == '"') {
+        snprintf(out, out_size, "const char *");
+        return true;
+    }
+    if (b->data[p] == '\'') {
+        snprintf(out, out_size, "char");
+        return true;
+    }
+    if (buf_word_is(b, p, end, "true") || buf_word_is(b, p, end, "false")) {
+        snprintf(out, out_size, "bool");
+        return true;
+    }
+    if (isdigit((unsigned char)b->data[p])) {
+        bool real = false;
+        while (p < end && (isdigit((unsigned char)b->data[p]) ||
+                           b->data[p] == '.' || b->data[p] == 'e' ||
+                           b->data[p] == 'E' || b->data[p] == '+' ||
+                           b->data[p] == '-' || b->data[p] == 'f' ||
+                           b->data[p] == 'F' || b->data[p] == 'u' ||
+                           b->data[p] == 'U' || b->data[p] == 'l' ||
+                           b->data[p] == 'L')) {
+            if (b->data[p] == '.' || b->data[p] == 'e' ||
+                b->data[p] == 'E' || b->data[p] == 'f' ||
+                b->data[p] == 'F')
+                real = true;
+            p++;
+        }
+        snprintf(out, out_size, "%s", real ? "double" : "int");
+        return true;
+    }
+    if (isalpha((unsigned char)b->data[p]) || b->data[p] == '_') {
+        size_t after = p;
+        size_t name_start = p;
+        size_t name_end;
+        if (auto_type_expr(b, p, end, &after, type, sizeof(type))) {
+            size_t q = after;
+            while (q < end && (b->data[q] == ' ' || b->data[q] == '\t'))
+                q++;
+            if (q < end && (b->data[q] == '(' || b->data[q] == '{')) {
+                snprintf(out, out_size, "%s", type);
+                return auto_decorate(out, out_size, is_ptr, is_ref);
+            }
+            if (q < end &&
+                (b->data[q] == '.' ||
+                 (b->data[q] == '-' && q + 1 < end &&
+                  b->data[q + 1] == '>')))
+                return false;
+        }
+        while (after < end &&
+               (isalnum((unsigned char)b->data[after]) ||
+                b->data[after] == '_'))
+            after++;
+        name_end = after;
+        if (name_end > name_start &&
+            auto_var_type(a, line, b->data + name_start,
+                          name_end - name_start, out, out_size))
+            return auto_decorate(out, out_size, is_ptr, is_ref);
+        return false;
+    }
+    return false;
+}
+
 static int buffer_function_end(Buffer *b, int start_line)
 {
     int line;
@@ -1861,8 +2102,15 @@ void app_rebuild_locals(App *a)
                 if (!type_prefix(b->data + s, e - s, word_start - s, type,
                                  sizeof(type)))
                     continue;
-                if (!local_type_word(a, type, strlen(type)))
+                if (type_has_auto(type)) {
+                    char inferred[256];
+                    if (!auto_infer_type(a, b, (int)ln + 1, word_end, e,
+                                         type, inferred, sizeof(inferred)))
+                        continue;
+                    snprintf(type, sizeof(type), "%s", inferred);
+                } else if (!local_type_word(a, type, strlen(type))) {
                     continue;
+                }
                 for (wi = 0; wi < a->nlocals; wi++) {
                     size_t nlen = word_end - word_start;
                     if (a->locals[wi].line == (int)ln + 1 &&

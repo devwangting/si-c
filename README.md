@@ -55,7 +55,9 @@ third-party runtime dependencies, and is AI-generated. See
   输入 `::` 列出类的静态成员、成员函数和嵌套类型，支持
   `Thing::Inner::` 和 `demo_ns::NsThing::` 这类限定名。C++ 类成员包括
   数据成员、成员函数、静态成员和嵌套类型，继承成员和 `this->` 也能列出；
-  Tab/Enter 接受，Esc 放弃当前词；鼠标单击高亮、双击接受、滚轮滚动。
+  `auto` 局部变量会从 `Type()`、`Type{}`、变量复制、`&var`、`&ref` 和常见
+  字面量推断类型；Tab/Enter 接受，Esc 放弃当前词；鼠标单击高亮、双击接受、
+  滚轮滚动。
 - **代码整理**：`F6`，内置 `astyle --style=ansi` 风格整理，保护预处理行。
 - **变量高亮**：`F8` 高亮当前变量在可见区域和 CODE 面板中的所有同名出现。
 - **主题与鼠标**：深色/浅色主题，SGR 鼠标点击、拖选、滚轮、四条可拖动分隔条。
@@ -396,9 +398,9 @@ make clean && make -j && make test
 结果：
 
 ```text
-test_core: 292 checks, 0 failures
+test_core: 293 checks, 0 failures
 test_keys:  30 checks, 0 failures
-ui_smoke:  305 checks, 0 failures
+ui_smoke:  313 checks, 0 failures
 ```
 
 macOS 的 `test_keys` 还包含 Option 键用例，检查数量会与本机不同。
@@ -427,7 +429,8 @@ Linux 使用同一套 POSIX 代码路径；建议首次在 Linux 上执行
 - 局部变量使用函数级符号表，块级 `{}` 作用域按函数级近似；在函数前插入/删除
   行会暂时偏移索引行号，必要时按 `F5` 重建。
 - 补全不解析 `(*p).x`、数组下标、函数返回值链式访问和模板实例化后的成员；
-  类型无法解析时不弹列表。
+  `auto` 只推断构造、变量复制、取地址/引用和常见字面量，不解析函数返回类型
+  或范围 `for` 的元素类型；类型无法解析时不弹列表。
 - CODE 预览对超长函数只显示窗口，可用滚轮 / `PgUp` / `PgDn` 滚动。
 - 有鼠标拖选和普通行编辑，但没有列选择、多光标、分屏、LSP、CTags 导入、
   持久化符号数据库。

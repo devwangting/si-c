@@ -163,3 +163,13 @@ int thing_demo(void)
     return thing.use_this();
 }
 
+int auto_demo(void)
+{
+    auto made = Thing();
+    auto copy = made;
+    auto *ptr = &made;
+    auto &ref = made;
+    made.value = 2;
+    return ptr->value + ref.value + copy.value;
+}
+

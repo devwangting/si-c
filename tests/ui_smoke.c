@@ -750,6 +750,35 @@ int main(int argc, char **argv)
                   "namespace-qualified type lists scope members");
             key(&a, KEY_ESC, NULL);
 
+            move_after_anchor(&a, "made.value = 2;");
+            type_text(&a, "made.");
+            check(a.comp_active && a.comp_member &&
+                  completion_has(&a, "value") &&
+                  completion_has(&a, "method"),
+                  "auto = Type() infers local type");
+            key(&a, KEY_ESC, NULL);
+
+            move_after_anchor(&a, "made.value = 2;");
+            type_text(&a, "ptr->");
+            check(a.comp_active && a.comp_member &&
+                  completion_has(&a, "value"),
+                  "auto* initializer infers pointee type");
+            key(&a, KEY_ESC, NULL);
+
+            move_after_anchor(&a, "made.value = 2;");
+            type_text(&a, "ref.");
+            check(a.comp_active && a.comp_member &&
+                  completion_has(&a, "value"),
+                  "auto& initializer infers referenced type");
+            key(&a, KEY_ESC, NULL);
+
+            move_after_anchor(&a, "made.value = 2;");
+            type_text(&a, "copy.");
+            check(a.comp_active && a.comp_member &&
+                  completion_has(&a, "value"),
+                  "auto copy infers source variable type");
+            key(&a, KEY_ESC, NULL);
+
             move_after_anchor(&a, anchor);
             key(&a, KEY_ESC, NULL);
             check(a.comp_suppress, "Esc arms suppression without popup");

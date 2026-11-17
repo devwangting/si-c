@@ -1258,7 +1258,7 @@ parts.append("""
 <h3>8.4 菜单与项目选择</h3>
 <p>顶端菜单是 <code>app_menu_*</code> + <code>draw_menu()</code>；项目目录选择是 <code>dir_picker_*</code> + <code>draw_dir_picker()</code>。打开项目时浏览目录，新建项目先选父目录再输入名字。</p>
 <h3>8.5 变量补全</h3>
-<p><code>app_completion_update()</code> 在编辑器每次输入字符、退格或删除后运行：判断是否在注释/字符串/预处理行，读取当前前缀，按名字索引收集局部变量、全局变量、函数、宏、类型和关键字；输入 <code>.</code> / <code>-&gt;</code> 时改为解析接收者类型并列出聚合成员，输入 <code>::</code> 时按类型/命名空间限定链解析，只列静态成员、成员函数和嵌套类型。Tab/Enter 接受，Esc 抑制当前词，鼠标单击高亮、双击接受、滚轮滚动。</p>
+<p><code>app_completion_update()</code> 在编辑器每次输入字符、退格或删除后运行：判断是否在注释/字符串/预处理行，读取当前前缀，按名字索引收集局部变量、全局变量、函数、宏、类型和关键字；输入 <code>.</code> / <code>-&gt;</code> 时改为解析接收者类型并列出聚合成员，输入 <code>::</code> 时按类型/命名空间限定链解析，只列静态成员、成员函数和嵌套类型。局部变量表由 <code>app_rebuild_locals()</code> 建立，<code>auto</code> 会从 <code>Type()</code>、<code>Type{}</code>、变量复制、<code>&amp;var</code>、<code>&amp;ref</code> 和常见字面量推断类型。Tab/Enter 接受，Esc 抑制当前词，鼠标单击高亮、双击接受、滚轮滚动。</p>
 <h3>8.6 代码整理</h3>
 <p><code>format_ansi_source()</code> 是内置的 ANSI 风格整理器：4 空格缩进、函数左大括号独占一行、控制语句同行。预处理行和反斜杠续行原样保留，避免宏被破坏。</p>
 <h3>8.7 导航历史</h3>
@@ -1328,17 +1328,17 @@ parts.append("""
 <tr><td>app.c:796</td><td>app_ensure_visible</td><td>调整 scroll_line/scroll_col 保证光标可见</td></tr>
 <tr><td>app.c:842</td><td>insert_at_cursor</td><td>插入字符并移动光标</td></tr>
 <tr><td>app.c:916</td><td>move_vertical</td><td>上下移动，保持 goal_col</td></tr>
-<tr><td>app.c:1761</td><td>app_rebuild_locals</td><td>扫描函数体，建立局部变量表</td></tr>
-<tr><td>app.c:2787</td><td>app_completion_update</td><td>收集并过滤补全候选</td></tr>
-<tr><td>app.c:2871</td><td>app_completion_accept</td><td>替换当前标识符并关闭列表</td></tr>
-<tr><td>app.c:2962</td><td>app_completion_handle_mouse</td><td>补全列表的鼠标命中/双击/滚轮</td></tr>
-<tr><td>app.c:3244</td><td>app_update_info</td><td>更新 CODE 面板的符号/定义/代码范围</td></tr>
-<tr><td>app.c:3938</td><td>app_show_context</td><td>构建调用链或同名函数选择</td></tr>
-<tr><td>app.c:4594</td><td>app_change_project</td><td>切换项目，关闭旧 Buffer，重新索引</td></tr>
-<tr><td>app.c:5693</td><td>app_handle_editor_key</td><td>编辑器的按键命令</td></tr>
-<tr><td>app.c:6052</td><td>editor_offset_at</td><td>鼠标坐标 → Buffer 字节偏移</td></tr>
-<tr><td>app.c:6579</td><td>app_handle_key</td><td>事件优先级分发</td></tr>
-<tr><td>app.c:7070</td><td>ui_run</td><td>初始化、主循环、清理</td></tr>
+<tr><td>app.c:2002</td><td>app_rebuild_locals</td><td>扫描函数体，建立局部变量表（含 auto 推断）</td></tr>
+<tr><td>app.c:3035</td><td>app_completion_update</td><td>收集并过滤补全候选</td></tr>
+<tr><td>app.c:3119</td><td>app_completion_accept</td><td>替换当前标识符并关闭列表</td></tr>
+<tr><td>app.c:3210</td><td>app_completion_handle_mouse</td><td>补全列表的鼠标命中/双击/滚轮</td></tr>
+<tr><td>app.c:3492</td><td>app_update_info</td><td>更新 CODE 面板的符号/定义/代码范围</td></tr>
+<tr><td>app.c:4186</td><td>app_show_context</td><td>构建调用链或同名函数选择</td></tr>
+<tr><td>app.c:4842</td><td>app_change_project</td><td>切换项目，关闭旧 Buffer，重新索引</td></tr>
+<tr><td>app.c:5941</td><td>app_handle_editor_key</td><td>编辑器的按键命令</td></tr>
+<tr><td>app.c:6300</td><td>editor_offset_at</td><td>鼠标坐标 → Buffer 字节偏移</td></tr>
+<tr><td>app.c:6827</td><td>app_handle_key</td><td>事件优先级分发</td></tr>
+<tr><td>app.c:7318</td><td>ui_run</td><td>初始化、主循环、清理</td></tr>
 <tr><td>text.c:98</td><td>buf_ensure_lines</td><td>重建行起始偏移表</td></tr>
 <tr><td>text.c:170</td><td>buf_line_of_offset</td><td>字节偏移 → 行号（二分）</td></tr>
 <tr><td>text.c:188</td><td>buf_visual_col</td><td>字节偏移 → 显示列</td></tr>
