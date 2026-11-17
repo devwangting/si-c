@@ -123,6 +123,9 @@ public:
     void method();
     struct Inner { int z; static int inner_count; void inner_method(); };
     int use_this() { return this->value; }
+    int read_value() {
+        return value;
+    }
     Thing make_thing();
     Thing *make_ptr();
 };

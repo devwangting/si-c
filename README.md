@@ -55,6 +55,7 @@ third-party runtime dependencies, and is AI-generated. See
   输入 `::` 列出类的静态成员、成员函数和嵌套类型，支持
   `Thing::Inner::` 和 `demo_ns::NsThing::` 这类限定名。C++ 类成员包括
   数据成员、成员函数、静态成员和嵌套类型，继承成员和 `this->` 也能列出；
+  在类方法内直接输入标识符时，也会列出当前类及基类成员（同名局部变量优先）。
   `auto` 局部变量会从 `Type()`、`Type{}`、变量复制、`&var`、`&ref`、常见
   字面量以及普通函数/成员函数的返回类型推断；`constexpr` / `thread_local`
   等修饰的局部变量也能识别。`Box<int>` 这类模板实例化会按 `Box` 解析成员，
@@ -400,9 +401,9 @@ make clean && make -j && make test
 结果：
 
 ```text
-test_core: 316 checks, 0 failures
+test_core: 317 checks, 0 failures
 test_keys:  30 checks, 0 failures
-ui_smoke:  325 checks, 0 failures
+ui_smoke:  329 checks, 0 failures
 ```
 
 macOS 的 `test_keys` 还包含 Option 键用例，检查数量会与本机不同。

@@ -500,8 +500,8 @@ static void test_project(const char *root)
         project_member_list_init(&members);
         check(project_aggregate_members(&p, "Thing", &members),
               "C++ class members found");
-        check(members.count == 10,
-              "Thing has ten members including base and methods");
+        check(members.count == 11,
+              "Thing has eleven members including base and methods");
         m = find_member(&members, "base_value");
         check(m != NULL && !m->is_method && !m->is_static && !m->is_type &&
               strcmp(m->type, "int") == 0, "inherited base_value is data");

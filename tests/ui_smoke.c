@@ -720,6 +720,20 @@ int main(int argc, char **argv)
                   "this-> lists current class and base members");
             key(&a, KEY_ESC, NULL);
 
+            move_after_anchor(&a, "return value;");
+            type_text(&a, "val");
+            check(a.comp_active && !a.comp_member &&
+                  completion_has(&a, "value"),
+                  "bare identifiers include current class data members");
+            key(&a, KEY_ESC, NULL);
+
+            move_after_anchor(&a, "return value;");
+            type_text(&a, "rea");
+            check(a.comp_active && !a.comp_member &&
+                  completion_has(&a, "read_value"),
+                  "bare identifiers include current class methods");
+            key(&a, KEY_ESC, NULL);
+
             move_after_anchor(&a, "thing.value = 1;");
             type_text(&a, "Thing::");
             check(a.comp_active && a.comp_member &&

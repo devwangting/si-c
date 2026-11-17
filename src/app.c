@@ -3163,6 +3163,47 @@ static bool completion_enclosing_class(App *a, int line, char *out,
     return true;
 }
 
+static bool completion_item_has(App *a, const char *name)
+{
+    size_t i;
+    for (i = 0; i < a->comp_count; i++) {
+        if (strcmp(a->comp_items[i].name, name) == 0)
+            return true;
+    }
+    return false;
+}
+
+static void completion_collect_class_members(App *a,
+                                             const CompletionContext *ctx)
+{
+    char type[256];
+    ProjectMemberList *members;
+    size_t i;
+
+    if (!completion_enclosing_class(a, ctx->line, type, sizeof(type)))
+        return;
+    members = completion_members(a, type);
+    if (!members)
+        return;
+    for (i = 0; i < members->count; i++) {
+        ProjectMember *m = &members->items[i];
+        const char *detail;
+        if (ctx->prefix_len > 0 &&
+            (strlen(m->name) < (size_t)ctx->prefix_len ||
+             memcmp(m->name, ctx->prefix, (size_t)ctx->prefix_len) != 0))
+            continue;
+        if (completion_item_has(a, m->name))
+            continue;
+        if (m->is_type)
+            detail = "type";
+        else if (m->is_method || m->is_static)
+            detail = m->signature;
+        else
+            detail = m->type[0] ? m->type : m->signature;
+        completion_item_add(a, m->name, detail, COMPLETE_GROUP_MEMBER);
+    }
+}
+
 static bool completion_member_type(App *a, const CompletionContext *ctx,
                                    char *out, size_t out_size)
 {
@@ -3385,6 +3426,7 @@ void app_completion_update(App *a)
         completion_collect_symbols(a, &ctx);
         completion_collect_keywords(a, &ctx);
         completion_collect_types(a, &ctx);
+        completion_collect_class_members(a, &ctx);
     }
     if (a->comp_count == 0) {
         app_completion_close(a);
