@@ -788,6 +788,14 @@ int main(int argc, char **argv)
                   "template instantiation lists class members");
             key(&a, KEY_ESC, NULL);
 
+            move_after_anchor(&a, "alias.value = 2;");
+            type_text(&a, "alias.");
+            check(a.comp_active && a.comp_member &&
+                  completion_has(&a, "value") &&
+                  completion_has(&a, "method"),
+                  "using alias lists target class members");
+            key(&a, KEY_ESC, NULL);
+
             move_after_anchor(&a, anchor);
             key(&a, KEY_ESC, NULL);
             check(a.comp_suppress, "Esc arms suppression without popup");

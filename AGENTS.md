@@ -24,7 +24,7 @@
 - Makefile 的 `%.o: %.c` 不跟踪头文件依赖：改过 `.h` 后执行 `make clean && make -j`，否则可能链接旧对象。
 - 新增 `.c` 时必须同时加入 Makefile 的 `SRC`，以及测试所需的 `CORE` / `UI_CORE`，否则主程序或测试会漏符号。
 - 编译选项是 `-std=c11 -Wall -Wextra -Wpedantic`；当前 GCC 下已有少量 `-Wformat-truncation` 警告（`util.c` / `render.c` / `app.c`），目标是不要新增警告。
-- Linux 当前实测：test_core 302、test_keys 30、ui_smoke 315。`test_keys` 的 macOS Option 用例在 `#if defined(__APPLE__)` 内，数量会与本机不同。
+- Linux 当前实测：test_core 307、test_keys 30、ui_smoke 317。`test_keys` 的 macOS Option 用例在 `#if defined(__APPLE__)` 内，数量会与本机不同。
 
 ## 运行时主流程
 
@@ -43,10 +43,10 @@
 - `Buffer`（`text.h`）：连续 UTF-8 字节；`cursor` 是字节偏移，列是显示列；Tab 宽 4。移动和删除必须用 `utf8_prev()` / `utf8_next()` / `buf_*` 辅助函数，不能假设一个字符占一个字节。
 - 编辑后行索引会失效，`buf_line_*` 按需重建；撤销按 `group` 合并，`buf_undo_break()` 用于切断组。
 - `Project`（`index.h`）：`files[]` 按 `rel` 排序，`syms[]` 按 file/line/col/kind/name 排序并去重；每个文件的符号在 `syms` 中必须连续，`files[i].sym_start/sym_count` 依赖这个不变量。改索引器时保持它。
-- 索引流程（`index.c`）：`scan_dir()` 递归扫描（跳过隐藏目录、符号链接目录和固定构建目录）→ `lex_source()`（跳过注释和字符串）→ `parse_source()` 依次解析宏、聚合类型、typedef、函数、全局变量。解析器是启发式的，不展开宏、不建 AST、不处理模板/继承/重载。`parse_variables()` 支持 `struct Point origin;`、带初始化器的全局变量和顶层多声明符；`project_aggregate_members()` 按需读取源文件提取结构体/联合/类成员（数据成员、成员函数、静态成员、嵌套类型），并合并基类成员；补全侧支持 `this->` 和继承成员。`compute_braces()` / `parse_functions()` 在 `#if` / `#else` / `#endif` 分支边界重置 brace depth 和作用域，尽量把互斥分支里的函数都索引出来（不判断哪个分支真正生效）。
+- 索引流程（`index.c`）：`scan_dir()` 递归扫描（跳过隐藏目录、符号链接目录和固定构建目录）→ `lex_source()`（跳过注释和字符串）→ `parse_source()` 依次解析宏、聚合类型、typedef、函数、全局变量。解析器是启发式的，不展开宏、不建 AST、不处理模板特化/重载。`parse_variables()` 支持 `struct Point origin;`、带初始化器的全局变量和顶层多声明符；`using Alias = Type;` 会索引成 `SYM_TYPEDEF` 并解析右侧目标类型。`project_aggregate_members()` 按需读取源文件提取结构体/联合/类成员（数据成员、成员函数、静态成员、嵌套类型），并合并基类成员；补全侧支持 `this->`、继承成员和 `Box<int>` 退化解析。`compute_braces()` / `parse_functions()` 在 `#if` / `#else` / `#endif` 分支边界重置 brace depth 和作用域，尽量把互斥分支里的函数都索引出来（不判断哪个分支真正生效）。
 - 关系表是独立阶段：`project_load()` 只建符号；`project_build_relations()` 才建调用边和全局变量使用表。调用边有两类：函数体里的直接调用 `name(`，以及函数名作为值出现（函数指针、`signal(SIGINT, handler)`、`std::thread` 参数等）；后者标记为 `is_reference`，CALL FLOW 中显示为 `[ref]`。同名方法解析优先匹配调用点的 `Class::`/`ns::Class::` 限定，其次匹配调用者所在类，最后退回同文件/首个定义；CALL FLOW 方框用 `symbol_short_name()` 保留限定名。不跟踪先存入变量/结构体再注册的间接关系。CALL FLOW 在未构建时显示 `RELATION INDEX NOT BUILT`，按 `Alt/Option+R` 或在大项目提示中确认后才构建；写 UI 测试时要显式调用它。
 - `project_find_refs()` / `project_search_text()` 从磁盘重新读文件，不包含未保存的缓冲区；`--refs` / `--search` 同理。
-- 缓存 `.si-index` 位于项目根目录，magic 为 `SICACH2`、版本为 `4`。改动 `Project`/`ProjectFile`/`Symbol`/`CallEdge`/`VarUse` 的持久化字段或顺序时，必须提升 `SI_CACHE_VERSION`（必要时改 magic），否则旧缓存会被错误解读。缓存只校验文件大小 + mtime，不做增量扫描；新增或删除文件需按 F5 重建。
+- 缓存 `.si-index` 位于项目根目录，magic 为 `SICACH2`、版本为 `5`。改动 `Project`/`ProjectFile`/`Symbol`/`CallEdge`/`VarUse` 的持久化字段或顺序时，必须提升 `SI_CACHE_VERSION`（必要时改 magic），否则旧缓存会被错误解读。缓存只校验文件大小 + mtime，不做增量扫描；新增或删除文件需按 F5 重建。
 - `~/.si-c-state` 除 `root=`/`file=`/`cursor=` 外还保存 `recent=` 项目历史（最近在前、绝对路径、读取时去重）。空工作区退出也必须写入历史，不能因 `root` 为空跳过；旧版只有 `root=` 时会在读取阶段迁移为第一条 recent。
 - `ui_run()` 里 `a.project = project` 是所有权转移；局部 `project` 不再单独释放，最后由 `project_free(&a.project)` 清理。
 

@@ -56,8 +56,9 @@ third-party runtime dependencies, and is AI-generated. See
   `Thing::Inner::` 和 `demo_ns::NsThing::` 这类限定名。C++ 类成员包括
   数据成员、成员函数、静态成员和嵌套类型，继承成员和 `this->` 也能列出；
   `auto` 局部变量会从 `Type()`、`Type{}`、变量复制、`&var`、`&ref` 和常见
-  字面量推断类型；`Box<int>` 这类模板实例化会按 `Box` 解析成员。Tab/Enter
-  接受，Esc 放弃当前词；鼠标单击高亮、双击接受、滚轮滚动。
+  字面量推断类型；`Box<int>` 这类模板实例化会按 `Box` 解析成员，
+  `using Alias = Type;` 别名也能展开到目标类型。Tab/Enter 接受，Esc 放弃
+  当前词；鼠标单击高亮、双击接受、滚轮滚动。
 - **代码整理**：`F6`，内置 `astyle --style=ansi` 风格整理，保护预处理行。
 - **变量高亮**：`F8` 高亮当前变量在可见区域和 CODE 面板中的所有同名出现。
 - **主题与鼠标**：深色/浅色主题，SGR 鼠标点击、拖选、滚轮、四条可拖动分隔条。
@@ -398,9 +399,9 @@ make clean && make -j && make test
 结果：
 
 ```text
-test_core: 302 checks, 0 failures
+test_core: 307 checks, 0 failures
 test_keys:  30 checks, 0 failures
-ui_smoke:  315 checks, 0 failures
+ui_smoke:  317 checks, 0 failures
 ```
 
 macOS 的 `test_keys` 还包含 Option 键用例，检查数量会与本机不同。

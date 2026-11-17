@@ -1242,7 +1242,7 @@ parts.append("""
 <h3>7.5 补全成员与全局变量</h3>
 <p><code>project_type_aggregate_key()</code> 把 <code>const struct Point *</code>、<code>Point[4]</code> 这类类型文本归一成 <code>Point</code>；<code>project_aggregate_members()</code> 按需读取聚合定义所在文件，用词法 token 找到 <code>{...}</code> 并收集第一层数据成员，供 <code>obj.</code> / <code>obj-&gt;</code> 和链式访问使用。</p>
 <p><code>parse_variables()</code> 同时补齐了常见全局变量形式：<code>struct Point origin;</code>、<code>Point world = {1, 2};</code>、<code>struct Point *ptr;</code>、顶层多声明符和数组。每个变量符号的签名以完整类型开头，成员解析不必再猜前一个声明符。</p>
-<p>C++ 类成员除数据字段外，还会收集成员函数、静态成员和嵌套类型；<code>class Thing : public Base</code> 会递归合并基类成员，补全 <code>this-></code> 时则从当前行找到外层类作为接收者类型。输入 <code>Thing::</code> 时按类型名解析，只列静态数据、成员函数和嵌套类型；<code>Thing::Inner::</code> 继续沿嵌套类型下钻，<code>demo_ns::NsThing::</code> 先跳过命名空间再解析类名。模板实例 <code>Box&lt;int&gt;</code> 由 <code>project_type_aggregate_key()</code> 退化为 <code>Box</code> 后查成员，不展开模板特化。</p>
+<p>C++ 类成员除数据字段外，还会收集成员函数、静态成员和嵌套类型；<code>class Thing : public Base</code> 会递归合并基类成员，补全 <code>this-></code> 时则从当前行找到外层类作为接收者类型。输入 <code>Thing::</code> 时按类型名解析，只列静态数据、成员函数和嵌套类型；<code>Thing::Inner::</code> 继续沿嵌套类型下钻，<code>demo_ns::NsThing::</code> 先跳过命名空间再解析类名。模板实例 <code>Box&lt;int&gt;</code> 由 <code>project_type_aggregate_key()</code> 退化为 <code>Box</code> 后查成员，不展开模板特化；<code>using Alias = Type;</code> 会索引成 <code>SYM_TYPEDEF</code>，按右侧目标类型继续解析成员。</p>
 </section>
 """)
 
@@ -1258,7 +1258,7 @@ parts.append("""
 <h3>8.4 菜单与项目选择</h3>
 <p>顶端菜单是 <code>app_menu_*</code> + <code>draw_menu()</code>；项目目录选择是 <code>dir_picker_*</code> + <code>draw_dir_picker()</code>。打开项目时浏览目录，新建项目先选父目录再输入名字。</p>
 <h3>8.5 变量补全</h3>
-<p><code>app_completion_update()</code> 在编辑器每次输入字符、退格或删除后运行：判断是否在注释/字符串/预处理行，读取当前前缀，按名字索引收集局部变量、全局变量、函数、宏、类型和关键字；输入 <code>.</code> / <code>-&gt;</code> 时改为解析接收者类型并列出聚合成员，输入 <code>::</code> 时按类型/命名空间限定链解析，只列静态成员、成员函数和嵌套类型。局部变量表由 <code>app_rebuild_locals()</code> 建立，<code>auto</code> 会从 <code>Type()</code>、<code>Type{}</code>、变量复制、<code>&amp;var</code>、<code>&amp;ref</code> 和常见字面量推断类型；模板实例 <code>Box&lt;int&gt;</code> 归一成 <code>Box</code> 后列成员。Tab/Enter 接受，Esc 抑制当前词，鼠标单击高亮、双击接受、滚轮滚动。</p>
+<p><code>app_completion_update()</code> 在编辑器每次输入字符、退格或删除后运行：判断是否在注释/字符串/预处理行，读取当前前缀，按名字索引收集局部变量、全局变量、函数、宏、类型和关键字；输入 <code>.</code> / <code>-&gt;</code> 时改为解析接收者类型并列出聚合成员，输入 <code>::</code> 时按类型/命名空间限定链解析，只列静态成员、成员函数和嵌套类型。局部变量表由 <code>app_rebuild_locals()</code> 建立，<code>auto</code> 会从 <code>Type()</code>、<code>Type{}</code>、变量复制、<code>&amp;var</code>、<code>&amp;ref</code> 和常见字面量推断类型；模板实例 <code>Box&lt;int&gt;</code> 归一成 <code>Box</code> 后列成员，<code>using Alias = Type;</code> 则沿 typedef 右侧的目标类型解析。Tab/Enter 接受，Esc 抑制当前词，鼠标单击高亮、双击接受、滚轮滚动。</p>
 <h3>8.6 代码整理</h3>
 <p><code>format_ansi_source()</code> 是内置的 ANSI 风格整理器：4 空格缩进、函数左大括号独占一行、控制语句同行。预处理行和反斜杠续行原样保留，避免宏被破坏。</p>
 <h3>8.7 导航历史</h3>
@@ -1355,13 +1355,13 @@ parts.append("""
 <tr><td>render.c:2947</td><td>app_render</td><td>整帧 ANSI 生成和输出</td></tr>
 <tr><td>index.c:193</td><td>lex_source</td><td>C 词法切分</td></tr>
 <tr><td>index.c:433</td><td>symbol_short_name</td><td>从签名提取限定短名</td></tr>
-<tr><td>index.c:913</td><td>parse_functions</td><td>函数定义/原型识别</td></tr>
-<tr><td>index.c:1461</td><td>compute_braces</td><td>括号配对与分支感知深度</td></tr>
-<tr><td>index.c:1500</td><td>parse_source</td><td>单文件解析入口</td></tr>
-<tr><td>index.c:2547</td><td>project_load</td><td>扫描项目、建立符号索引</td></tr>
-<tr><td>index.c:3393</td><td>build_call_graph</td><td>调用/函数值引用关系图</td></tr>
-<tr><td>index.c:3666</td><td>project_caller_tree</td><td>反向调用者树</td></tr>
-<tr><td>index.c:3717</td><td>project_context</td><td>调用者/被调用者/引用数</td></tr>
+<tr><td>index.c:925</td><td>parse_functions</td><td>函数定义/原型识别</td></tr>
+<tr><td>index.c:1473</td><td>compute_braces</td><td>括号配对与分支感知深度</td></tr>
+<tr><td>index.c:1512</td><td>parse_source</td><td>单文件解析入口</td></tr>
+<tr><td>index.c:2579</td><td>project_load</td><td>扫描项目、建立符号索引</td></tr>
+<tr><td>index.c:3425</td><td>build_call_graph</td><td>调用/函数值引用关系图</td></tr>
+<tr><td>index.c:3698</td><td>project_caller_tree</td><td>反向调用者树</td></tr>
+<tr><td>index.c:3749</td><td>project_context</td><td>调用者/被调用者/引用数</td></tr>
 </table>
 </section>
 """)

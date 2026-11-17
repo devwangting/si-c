@@ -139,6 +139,15 @@ void Thing::method() {}
 int Thing::count = 0;
 void demo_ns::NsThing::ns_method() {}
 
+using AliasThing = Thing;
+
+int alias_demo(void)
+{
+    AliasThing alias;
+    alias.value = 2;
+    return alias.value;
+}
+
 class AlphaThing {
 public:
     void ping();

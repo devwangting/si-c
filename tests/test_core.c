@@ -560,6 +560,27 @@ static void test_project(const char *root)
               "template static member found");
         project_member_list_free(&members);
 
+        {
+            IntList aids;
+            int alias_idx = -1;
+            intlist_init(&aids);
+            project_find_symbols(&p, "AliasThing", &aids);
+            if (aids.count > 0)
+                alias_idx = aids.items[0];
+            intlist_free(&aids);
+            check(alias_idx >= 0 && p.syms[alias_idx].kind == SYM_TYPEDEF,
+                  "using alias is indexed as typedef");
+            if (alias_idx >= 0) {
+                project_member_list_init(&members);
+                check(project_aggregate_members(&p, "AliasThing", &members),
+                      "using alias resolves target members");
+                m = find_member(&members, "value");
+                check(m != NULL && !m->is_method,
+                      "using alias exposes Thing.value");
+                project_member_list_free(&members);
+            }
+        }
+
         project_member_list_init(&members);
         check(!project_aggregate_members(&p, "CompletionForward", &members),
               "forward declaration has no members");

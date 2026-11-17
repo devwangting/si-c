@@ -828,8 +828,10 @@ static void parse_typedefs(Parser *ps)
         int depth;
         int alias = -1;
         int first = -1;
+        bool is_typedef = tok_text(ps, i, "typedef");
+        bool is_using = tok_text(ps, i, "using");
 
-        if (!tok_text(ps, i, "typedef"))
+        if (!is_typedef && !is_using)
             continue;
         depth = ps->depth[i];
         for (j = i + 1; j < ps->n; j++) {
@@ -844,6 +846,16 @@ static void parse_typedefs(Parser *ps)
         }
         if (semi < 0)
             continue;
+
+        if (is_using) {
+            /* using Alias = Type; (skip using namespace / using Base::name) */
+            if (!tok_ident(ps, i + 1) || i + 2 >= ps->n ||
+                !tok_is(ps, i + 2, '='))
+                continue;
+            add_symbol(ps, SYM_TYPEDEF, i + 1, i, semi - 1,
+                       ps->t[semi].line);
+            continue;
+        }
 
         /* Function pointer typedef: typedef int (*cb)(int); */
         for (j = i + 1; j + 3 < semi; j++) {
@@ -2286,7 +2298,8 @@ static bool collect_typedef_body(Project *p, const Symbol *s,
         if (tdepth[i] == adepth && tok_is_punct(src, &lx.toks[i], ';'))
             break;
         if (tdepth[i] == adepth &&
-            tok_is_text(src, &lx.toks[i], "typedef")) {
+            (tok_is_text(src, &lx.toks[i], "typedef") ||
+             tok_is_text(src, &lx.toks[i], "using"))) {
             start = i;
             break;
         }
@@ -2324,7 +2337,26 @@ static bool collect_typedef_body(Project *p, const Symbol *s,
             break;
         }
         if (!found) {
-            for (i = alias - 1; i > start; i--) {
+            bool using_alias =
+                tok_is_text(src, &lx.toks[start], "using");
+            int scan_start = alias - 1;
+            int scan_end = start;
+            if (using_alias) {
+                int eq = -1;
+                for (i = alias + 1; i < end; i++) {
+                    if (tok_is_punct(src, &lx.toks[i], '=')) {
+                        eq = i;
+                        break;
+                    }
+                }
+                if (eq >= 0) {
+                    scan_start = end - 1;
+                    scan_end = eq;
+                } else {
+                    scan_start = scan_end;
+                }
+            }
+            for (i = scan_start; i > scan_end; i--) {
                 const char *text;
                 size_t n;
                 char *type;
@@ -2652,7 +2684,7 @@ void project_free(Project *p)
 /* ------------------------------------------------------------------ */
 
 #define SI_CACHE_MAGIC "SICACH2\0"
-#define SI_CACHE_VERSION 4u
+#define SI_CACHE_VERSION 5u
 
 static bool cache_write(FILE *f, const void *data, size_t len)
 {
