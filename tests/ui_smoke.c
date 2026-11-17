@@ -779,6 +779,15 @@ int main(int argc, char **argv)
                   "auto copy infers source variable type");
             key(&a, KEY_ESC, NULL);
 
+            move_after_anchor(&a, "box.item = 1;");
+            type_text(&a, "box.");
+            check(a.comp_active && a.comp_member &&
+                  completion_has(&a, "item") &&
+                  completion_has(&a, "put") &&
+                  completion_has(&a, "box_count"),
+                  "template instantiation lists class members");
+            key(&a, KEY_ESC, NULL);
+
             move_after_anchor(&a, anchor);
             key(&a, KEY_ESC, NULL);
             check(a.comp_suppress, "Esc arms suppression without popup");

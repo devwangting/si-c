@@ -173,3 +173,18 @@ int auto_demo(void)
     return ptr->value + ref.value + copy.value;
 }
 
+template <typename T>
+class Box {
+public:
+    T item;
+    void put(T v);
+    static int box_count;
+};
+
+int template_demo(void)
+{
+    Box<int> box;
+    box.item = 1;
+    return box.item;
+}
+

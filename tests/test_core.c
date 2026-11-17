@@ -548,6 +548,19 @@ static void test_project(const char *root)
         project_member_list_free(&members);
 
         project_member_list_init(&members);
+        check(project_aggregate_members(&p, "Box", &members),
+              "template class members found");
+        m = find_member(&members, "item");
+        check(m != NULL && !m->is_method && strcmp(m->type, "T") == 0,
+              "template data member keeps type parameter");
+        m = find_member(&members, "put");
+        check(m != NULL && m->is_method, "template method found");
+        m = find_member(&members, "box_count");
+        check(m != NULL && m->is_static && !m->is_method,
+              "template static member found");
+        project_member_list_free(&members);
+
+        project_member_list_init(&members);
         check(!project_aggregate_members(&p, "CompletionForward", &members),
               "forward declaration has no members");
         project_member_list_free(&members);
