@@ -826,9 +826,13 @@ static bool signature_prefix(Parser *ps, int name, bool in_aggregate,
     return true;
 }
 
+static bool preproc_is(const Parser *ps, int i, const char *word);
+
 static void parse_functions(Parser *ps)
 {
     int *scope_stack = xmalloc((size_t)(ps->n + 1) * sizeof(*scope_stack));
+    int cond_stack[64];
+    int cond_top = -1;
     int top = -1;
     int i;
 
@@ -847,6 +851,22 @@ static void parse_functions(Parser *ps)
         int sig_start;
         int end_line;
 
+        if (preproc_is(ps, i, "if") || preproc_is(ps, i, "ifdef") ||
+            preproc_is(ps, i, "ifndef")) {
+            if (cond_top + 1 < (int)SI_ARRAY_LEN(cond_stack))
+                cond_stack[++cond_top] = top;
+            continue;
+        }
+        if (preproc_is(ps, i, "else") || preproc_is(ps, i, "elif")) {
+            if (cond_top >= 0)
+                top = cond_stack[cond_top];
+            continue;
+        }
+        if (preproc_is(ps, i, "endif")) {
+            if (cond_top >= 0)
+                top = cond_stack[cond_top--];
+            continue;
+        }
         if (tok_is(ps, i, '{')) {
             int scope = ps->brace_scope[i];
             scope_stack[++top] = scope ? scope : SCOPE_BLOCK;
@@ -1328,9 +1348,39 @@ static void parse_variables(Parser *ps)
     }
 }
 
+static bool preproc_is(const Parser *ps, int i, const char *word)
+{
+    const char *s;
+    int len;
+    int p;
+    size_t n;
+
+    if (i < 0 || i >= ps->n || ps->t[i].kind != TK_PREPROC)
+        return false;
+    s = ps->src + ps->t[i].start;
+    len = ps->t[i].len;
+    p = 0;
+    while (p < len && (s[p] == ' ' || s[p] == '\t'))
+        p++;
+    if (p >= len || s[p] != '#')
+        return false;
+    p++;
+    while (p < len && (s[p] == ' ' || s[p] == '\t'))
+        p++;
+    n = strlen(word);
+    if ((size_t)(p + (int)n) > (size_t)len || memcmp(s + p, word, n) != 0)
+        return false;
+    if (p + (int)n < len &&
+        (isalnum((unsigned char)s[p + n]) || s[p + n] == '_'))
+        return false;
+    return true;
+}
+
 static void compute_braces(Parser *ps)
 {
     int *stack = xmalloc((size_t)(ps->n + 1) * sizeof(*stack));
+    int cond_stack[64];
+    int cond_top = -1;
     int top = -1;
     int d = 0;
     int i;
@@ -1338,7 +1388,18 @@ static void compute_braces(Parser *ps)
     for (i = 0; i < ps->n; i++) {
         ps->depth[i] = d;
         ps->match[i] = -1;
-        if (tok_is(ps, i, '{')) {
+        if (preproc_is(ps, i, "if") || preproc_is(ps, i, "ifdef") ||
+            preproc_is(ps, i, "ifndef")) {
+            if (cond_top + 1 < (int)SI_ARRAY_LEN(cond_stack))
+                cond_stack[++cond_top] = d;
+        } else if (preproc_is(ps, i, "else") ||
+                   preproc_is(ps, i, "elif")) {
+            if (cond_top >= 0)
+                d = cond_stack[cond_top];
+        } else if (preproc_is(ps, i, "endif")) {
+            if (cond_top >= 0)
+                d = cond_stack[cond_top--];
+        } else if (tok_is(ps, i, '{')) {
             stack[++top] = i;
             d++;
         } else if (tok_is(ps, i, '}')) {
@@ -3305,8 +3366,8 @@ static void caller_preview(Project *p, const CallEdge *e, char *buf,
                            size_t size)
 {
     Symbol *s = &p->syms[e->caller];
-    snprintf(buf, size, "%s%s", s->signature,
-             e->is_reference ? "  [ref]" : "");
+    snprintf(buf, size, "%s%s", e->is_reference ? "[ref] " : "",
+             s->signature);
 }
 
 static void caller_tree_walk(Project *p, const CallGraph *g, int symbol_index,

@@ -504,6 +504,8 @@ int main(int argc, char **argv)
     type_text(&a, "main");
     check(a.view.count >= 1, "symbol search result");
     key(&a, KEY_ENTER, NULL);
+    if (a.focus == FOCUS_CONTEXT)
+        key(&a, KEY_ENTER, NULL);
     check(strcmp(app_buffer(&a)->name, "main.c") == 0, "jumped to main.c");
 
     key(&a, KEY_F12, NULL);

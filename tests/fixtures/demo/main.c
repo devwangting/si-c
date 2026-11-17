@@ -99,3 +99,11 @@ int callback_signal_demo(void)
     return 0;
 }
 
+#ifdef BRANCH_A
+static int branch_alt(void) {
+#else
+static int branch_main(void) {
+#endif
+    return callback_target(1);
+}
+
