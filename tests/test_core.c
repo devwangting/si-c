@@ -281,6 +281,64 @@ static void test_project(const char *root)
             }
         }
         {
+            int alpha_ping = -1;
+            int beta_ping = -1;
+            IntList pids;
+            size_t j;
+            SymbolContext qctx;
+            bool saw_alpha = false;
+            bool saw_beta = false;
+            intlist_init(&pids);
+            project_find_symbols(&p, "ping", &pids);
+            for (j = 0; j < pids.count; j++) {
+                Symbol *ps = &p.syms[pids.items[j]];
+                if (ps->kind != SYM_FUNCTION)
+                    continue;
+                if (strstr(ps->signature, "AlphaThing::ping") != NULL)
+                    alpha_ping = (int)pids.items[j];
+                if (strstr(ps->signature, "BetaThing::ping") != NULL)
+                    beta_ping = (int)pids.items[j];
+            }
+            intlist_free(&pids);
+            check(alpha_ping >= 0 && beta_ping >= 0,
+                  "qualified methods are indexed");
+            if (alpha_ping >= 0) {
+                char label[128];
+                check(symbol_short_name(p.syms[alpha_ping].signature, label,
+                                        sizeof(label)) &&
+                      strcmp(label, "AlphaThing::ping") == 0,
+                      "call flow label keeps class qualifier");
+                check(project_context(&p, alpha_ping, &qctx),
+                      "alpha ping context");
+                for (j = 0; j < qctx.callers.count; j++) {
+                    const char *pv = qctx.callers.items[j].preview;
+                    if (pv && strstr(pv, "AlphaThing::call") != NULL)
+                        saw_alpha = true;
+                    if (pv && strstr(pv, "BetaThing::call") != NULL)
+                        saw_beta = true;
+                }
+                check(saw_alpha && !saw_beta,
+                      "same-class call resolves to alpha ping");
+                symbol_context_free(&qctx);
+            }
+            if (beta_ping >= 0) {
+                saw_alpha = false;
+                saw_beta = false;
+                check(project_context(&p, beta_ping, &qctx),
+                      "beta ping context");
+                for (j = 0; j < qctx.callers.count; j++) {
+                    const char *pv = qctx.callers.items[j].preview;
+                    if (pv && strstr(pv, "AlphaThing::call") != NULL)
+                        saw_alpha = true;
+                    if (pv && strstr(pv, "BetaThing::call") != NULL)
+                        saw_beta = true;
+                }
+                check(saw_beta && !saw_alpha,
+                      "same-class call resolves to beta ping");
+                symbol_context_free(&qctx);
+            }
+        }
+        {
             int bm_idx = -1;
             int ba_idx = -1;
             IntList bids;

@@ -430,6 +430,88 @@ const char *symbol_kind_short(SymbolKind kind)
     return kind_word(kind);
 }
 
+bool symbol_short_name(const char *signature, char *out, size_t out_size)
+{
+    const char *sig = signature ? signature : "";
+    const char *paren = strchr(sig, '(');
+    const char *name_end;
+    const char *start;
+    const char *q;
+
+    if (!out || out_size == 0)
+        return false;
+    out[0] = '\0';
+    if (!paren)
+        paren = sig + strlen(sig);
+    name_end = paren;
+    while (name_end > sig && isspace((unsigned char)name_end[-1]))
+        name_end--;
+    start = name_end;
+    while (start > sig &&
+           (isalnum((unsigned char)start[-1]) || start[-1] == '_'))
+        start--;
+    if (start == name_end) {
+        snprintf(out, out_size, "%s", sig);
+        return out[0] != '\0';
+    }
+    if (start > sig && start[-1] == '~')
+        start--;
+    while (start > sig) {
+        q = start;
+        while (q > sig && isspace((unsigned char)q[-1]))
+            q--;
+        if (q - sig < 2 || q[-1] != ':' || q[-2] != ':')
+            break;
+        q -= 2;
+        while (q > sig && isspace((unsigned char)q[-1]))
+            q--;
+        {
+            const char *ident_end = q;
+            while (q > sig &&
+                   (isalnum((unsigned char)q[-1]) || q[-1] == '_'))
+                q--;
+            if (q == ident_end)
+                break;
+        }
+        if (q > sig && q[-1] == '~')
+            q--;
+        start = q;
+    }
+    {
+        size_t n = (size_t)(name_end - start);
+        if (n >= out_size)
+            n = out_size - 1;
+        memcpy(out, start, n);
+        out[n] = '\0';
+    }
+    return out[0] != '\0';
+}
+
+static bool signature_qualifier(const char *signature, char *out,
+                                size_t out_size)
+{
+    char full[256];
+    const char *sep;
+    size_t n;
+
+    if (!out || out_size == 0)
+        return false;
+    out[0] = '\0';
+    if (!symbol_short_name(signature, full, sizeof(full)))
+        return false;
+    sep = strrchr(full, ':');
+    if (!sep || sep == full || sep[-1] != ':')
+        return false;
+    n = (size_t)(sep - 1 - full);
+    if (n == 0)
+        return false;
+    if (n >= out_size)
+        n = out_size - 1;
+    memcpy(out, full, n);
+    out[n] = '\0';
+    return true;
+}
+
 static int add_symbol_raw(Parser *ps, SymbolKind kind, int name_tok,
                           const char *signature, int end_line)
 {
@@ -1601,6 +1683,12 @@ static bool tok_is_punct(const char *src, const Tok *t, char c)
     return t->kind == TK_PUNCT && t->len == 1 && src[t->start] == c;
 }
 
+static bool tok_is_scope(const char *src, const Tok *t)
+{
+    return t->kind == TK_PUNCT && t->len == 2 &&
+           src[t->start] == ':' && src[t->start + 1] == ':';
+}
+
 static bool tok_is_text(const char *src, const Tok *t, const char *text)
 {
     size_t n = strlen(text);
@@ -2564,7 +2652,7 @@ void project_free(Project *p)
 /* ------------------------------------------------------------------ */
 
 #define SI_CACHE_MAGIC "SICACH2\0"
-#define SI_CACHE_VERSION 3u
+#define SI_CACHE_VERSION 4u
 
 static bool cache_write(FILE *f, const void *data, size_t len)
 {
@@ -3087,16 +3175,34 @@ static int enclosing_function(Project *p, int file_index, int line)
     return best;
 }
 
+static bool qualifier_matches(const Symbol *s, const char *want)
+{
+    char q[256];
+    if (!want || !*want)
+        return false;
+    return signature_qualifier(s->signature, q, sizeof(q)) &&
+           strcmp(q, want) == 0;
+}
+
 static int callable_symbol(Project *p, Symbol **funcs, size_t nfuncs,
-                           const char *name, int file_index)
+                           const char *name, int file_index,
+                           const char *site_qualifier,
+                           const char *caller_qualifier)
 {
     size_t lo = 0;
     size_t hi = nfuncs;
     size_t i;
     int first_def = -1;
+    int same_file_def = -1;
     int prototype = -1;
     int same_file_proto = -1;
+    int q_def[2] = {-1, -1};
+    int q_proto[2] = {-1, -1};
+    const char *wants[2];
+    int w;
 
+    wants[0] = site_qualifier;
+    wants[1] = caller_qualifier;
     while (lo < hi) {
         size_t mid = lo + (hi - lo) / 2;
         if (strcmp(funcs[mid]->name, name) < 0)
@@ -3106,23 +3212,70 @@ static int callable_symbol(Project *p, Symbol **funcs, size_t nfuncs,
     }
     for (i = lo; i < nfuncs && strcmp(funcs[i]->name, name) == 0; i++) {
         Symbol *s = funcs[i];
+        int idx = (int)(s - p->syms);
         if (s->kind == SYM_FUNCTION) {
-            if (s->file_index == file_index)
-                return (int)(s - p->syms);
             if (first_def < 0)
-                first_def = (int)(s - p->syms);
+                first_def = idx;
+            if (s->file_index == file_index && same_file_def < 0)
+                same_file_def = idx;
+            for (w = 0; w < 2; w++) {
+                if (q_def[w] < 0 && qualifier_matches(s, wants[w]))
+                    q_def[w] = idx;
+            }
         } else if (s->kind == SYM_PROTOTYPE) {
             if (prototype < 0)
-                prototype = (int)(s - p->syms);
+                prototype = idx;
             if (s->file_index == file_index && same_file_proto < 0)
-                same_file_proto = (int)(s - p->syms);
+                same_file_proto = idx;
+            for (w = 0; w < 2; w++) {
+                if (q_proto[w] < 0 && qualifier_matches(s, wants[w]))
+                    q_proto[w] = idx;
+            }
         }
     }
+    if (q_def[0] >= 0)
+        return q_def[0];
+    if (q_def[1] >= 0)
+        return q_def[1];
+    if (q_proto[0] >= 0)
+        return q_proto[0];
+    if (q_proto[1] >= 0)
+        return q_proto[1];
+    if (same_file_def >= 0)
+        return same_file_def;
     if (first_def >= 0)
         return first_def;
     if (same_file_proto >= 0)
         return same_file_proto;
     return prototype;
+}
+
+static bool call_site_qualifier(const char *src, const Tok *t, int ti,
+                                char *out, size_t out_size)
+{
+    int start = ti;
+    int i = ti - 1;
+    size_t len = 0;
+    bool any = false;
+
+    if (!out || out_size == 0)
+        return false;
+    out[0] = '\0';
+    while (i >= 1 && tok_is_scope(src, &t[i]) && tok_is_ident(&t[i - 1])) {
+        start = i - 1;
+        i -= 2;
+        any = true;
+    }
+    if (!any)
+        return false;
+    for (i = start; i < ti - 1; i++) {
+        if (len + (size_t)t[i].len >= out_size)
+            break;
+        memcpy(out + len, src + t[i].start, (size_t)t[i].len);
+        len += (size_t)t[i].len;
+    }
+    out[len] = '\0';
+    return len > 0;
 }
 
 static bool call_reserved(const char *s, int len)
@@ -3276,6 +3429,7 @@ static bool build_call_graph(Project *p, CallGraph *g,
         int sym_end;
         int cur_sym = -1;
         bool in_body = false;
+        char caller_q[256] = "";
 
         if (!file_read_all(p->files[fi].path, SI_MAX_FILE_SIZE, &src, &len,
                            &err)) {
@@ -3307,12 +3461,18 @@ static bool build_call_graph(Project *p, CallGraph *g,
             if (cur_sym != sym_begin) {
                 cur_sym = sym_begin;
                 in_body = false;
+                if (!signature_qualifier(p->syms[cur_sym].signature,
+                                         caller_q, sizeof(caller_q)))
+                    caller_q[0] = '\0';
             }
             if (t->kind == TK_PUNCT && src[t->start] == '{') {
                 in_body = true;
                 continue;
             }
             if (!in_body || t->kind != TK_IDENT)
+                continue;
+            if (ti + 1 < lx.count &&
+                tok_is_scope(src, &lx.toks[ti + 1]))
                 continue;
 
             is_call = ti + 1 < lx.count &&
@@ -3322,6 +3482,9 @@ static bool build_call_graph(Project *p, CallGraph *g,
             {
                 bool member_access = false;
                 bool handled = false;
+                char site_q[256];
+                call_site_qualifier(src, lx.toks, ti, site_q,
+                                    sizeof(site_q));
                 if (ti > 0) {
                     if (tok_is_punct(src, &lx.toks[ti - 1], '.')) {
                         member_access = true;
@@ -3342,7 +3505,8 @@ static bool build_call_graph(Project *p, CallGraph *g,
                     {
                         char *name = xstrndup(src + t->start,
                                               (size_t)t->len);
-                        ci = callable_symbol(p, funcs, nfuncs, name, (int)fi);
+                        ci = callable_symbol(p, funcs, nfuncs, name, (int)fi,
+                                             site_q, caller_q);
                         free(name);
                     }
                     if (ci >= 0)
@@ -3364,7 +3528,8 @@ static bool build_call_graph(Project *p, CallGraph *g,
                         !call_reserved(src + t->start, t->len)) {
                         char *name = xstrndup(src + t->start,
                                               (size_t)t->len);
-                        ci = callable_symbol(p, funcs, nfuncs, name, (int)fi);
+                        ci = callable_symbol(p, funcs, nfuncs, name, (int)fi,
+                                             site_q, caller_q);
                         free(name);
                         if (ci >= 0)
                             callgraph_add(g, cur_sym, ci, (int)fi,

@@ -1144,7 +1144,7 @@ parts.append("""
 </table>
 
 <h3>7.3 调用图：直接调用 + 函数值引用</h3>
-<p>旧实现把所有同名标识符引用都当成调用，结果变量名、函数名相同就会生成假调用边，递归还可能出现很多重复 <code>main</code>。现在扫描函数体里的两类关系：直接调用 <code>name(</code>，以及函数名作为值出现（函数指针、<code>signal(SIGINT, handler)</code>、<code>std::thread</code> 参数等）。后者存成 <code>is_reference</code> 边，CALL FLOW 显示 <code>[ref]</code>，不会伪装成普通调用。</p>
+<p>旧实现把所有同名标识符引用都当成调用，结果变量名、函数名相同就会生成假调用边，递归还可能出现很多重复 <code>main</code>。现在扫描函数体里的两类关系：直接调用 <code>name(</code>，以及函数名作为值出现（函数指针、<code>signal(SIGINT, handler)</code>、<code>std::thread</code> 参数等）。后者存成 <code>is_reference</code> 边，CALL FLOW 显示 <code>[ref]</code>，不会伪装成普通调用。C++ 同名方法再按限定名消歧：调用点写成 <code>Class::method()</code> 时提取 <code>Class</code>，否则用调用者签名里的 <code>Class::</code> 前缀；两者都优先于同文件/首个定义的回退规则。</p>
 """)
 parts.append(code("build_call_graph() 的核心", r'''
 for (每个文件) {
@@ -1152,6 +1152,7 @@ for (每个文件) {
 
     cur_func = -1;
     in_body = false;
+    caller_q = "";
 
     for (每个 token t) {
         /* 根据行号找到当前函数 */
@@ -1159,21 +1160,30 @@ for (每个文件) {
             advance;
 
         if (t 是当前函数) {
+            if (cur_func 变化)
+                caller_q = signature_qualifier(cur_func.signature);
+
             if (t == '{')
                 in_body = true;   /* 进入函数体 */
 
             if (!in_body)
                 continue;         /* 签名行不计 */
 
+            if (t 是标识符 && 下一个 token 是 '::')
+                continue;         /* Class::method 的 Class */
+
+            site_q = call_site_qualifier(t);
             if (t 是标识符 && 下一个 token 是 '(' &&
                 不是 if/for/while/sizeof 等关键字) {
-                callee = callable_symbol(p, name, current_file);
+                callee = callable_symbol(p, name, current_file,
+                                         site_q, caller_q);
                 if (callee >= 0)
                     callgraph_add(..., is_reference=false);
             } else if (t 是标识符 && 不是 obj.member / obj->member) {
                 /* 先让同名全局变量优先；否则查函数名 */
                 if (不是全局变量 &&
-                    (callee = callable_symbol(p, name, current_file)) >= 0)
+                    (callee = callable_symbol(p, name, current_file,
+                                              site_q, caller_q)) >= 0)
                     callgraph_add(..., is_reference=true);
             }
         }
@@ -1206,7 +1216,7 @@ static void caller_tree_walk(Project *p, CallGraph *g,
     }
 }
 '''))
-parts.append(note("warn", "调用图仍是按函数名近似：不做重载解析、虚函数分派、宏展开，也不跟踪“先存到函数指针变量/结构体、之后再注册”的间接关系；<code>[ref]</code> 只覆盖函数体里的直接函数值引用。同名 static 函数会优先匹配同文件定义，但跨文件同名全局函数仍可能歧义。"))
+parts.append(note("warn", "调用图仍是按名字近似：不做重载解析、虚函数分派、模板实例化和宏展开，也不跟踪“先存到函数指针变量/结构体、之后再注册”的间接关系；<code>[ref]</code> 只覆盖函数体里的直接函数值引用。同名方法会优先匹配调用点/调用者签名里的 <code>Class::</code> 限定，再退回同文件定义和首个定义，因此没有限定信息的跨文件同名全局函数仍可能歧义。"))
 
 parts.append("""
 <h3>7.4 局部变量遮蔽</h3>
@@ -1244,7 +1254,7 @@ parts.append("""
 <h3>8.2 CODE 面板</h3>
 <p><code>app_update_info()</code> 找光标下标识符，解析符号/局部变量，打开定义文件（如果不在当前 Buffer），设置 <code>info_code_start</code>/<code>info_def_end</code>。顶部固定两行显示符号种类、名字、定义位置。</p>
 <h3>8.3 调用链与同名函数选择</h3>
-<p>点击函数名时，如果项目里存在多个同名函数定义，打开 <code>SELECT DEFINITION</code> 选择框。确认后把调用链固定到指定符号；点击调用者时跳到真实调用点。</p>
+<p>点击函数名时，如果项目里存在多个同名函数定义，打开 <code>SELECT DEFINITION</code> 选择框。确认后把调用链固定到指定符号；点击调用者时跳到真实调用点。CALL FLOW 方框通过 <code>symbol_short_name()</code> 显示 <code>Class::method</code> 或 <code>ns::Class::method</code>，同名方法不再只能靠文件名区分。</p>
 <h3>8.4 菜单与项目选择</h3>
 <p>顶端菜单是 <code>app_menu_*</code> + <code>draw_menu()</code>；项目目录选择是 <code>dir_picker_*</code> + <code>draw_dir_picker()</code>。打开项目时浏览目录，新建项目先选父目录再输入名字。</p>
 <h3>8.5 变量补全</h3>
@@ -1344,13 +1354,14 @@ parts.append("""
 <tr><td>render.c:2811</td><td>draw_content</td><td>五块面板的内容区绘制</td></tr>
 <tr><td>render.c:2947</td><td>app_render</td><td>整帧 ANSI 生成和输出</td></tr>
 <tr><td>index.c:193</td><td>lex_source</td><td>C 词法切分</td></tr>
-<tr><td>index.c:831</td><td>parse_functions</td><td>函数定义/原型识别</td></tr>
-<tr><td>index.c:1379</td><td>compute_braces</td><td>括号配对与分支感知深度</td></tr>
-<tr><td>index.c:1418</td><td>parse_source</td><td>单文件解析入口</td></tr>
-<tr><td>index.c:2459</td><td>project_load</td><td>扫描项目、建立符号索引</td></tr>
-<tr><td>index.c:3240</td><td>build_call_graph</td><td>调用/函数值引用关系图</td></tr>
-<tr><td>index.c:3501</td><td>project_caller_tree</td><td>反向调用者树</td></tr>
-<tr><td>index.c:3552</td><td>project_context</td><td>调用者/被调用者/引用数</td></tr>
+<tr><td>index.c:433</td><td>symbol_short_name</td><td>从签名提取限定短名</td></tr>
+<tr><td>index.c:913</td><td>parse_functions</td><td>函数定义/原型识别</td></tr>
+<tr><td>index.c:1461</td><td>compute_braces</td><td>括号配对与分支感知深度</td></tr>
+<tr><td>index.c:1500</td><td>parse_source</td><td>单文件解析入口</td></tr>
+<tr><td>index.c:2547</td><td>project_load</td><td>扫描项目、建立符号索引</td></tr>
+<tr><td>index.c:3393</td><td>build_call_graph</td><td>调用/函数值引用关系图</td></tr>
+<tr><td>index.c:3666</td><td>project_caller_tree</td><td>反向调用者树</td></tr>
+<tr><td>index.c:3717</td><td>project_context</td><td>调用者/被调用者/引用数</td></tr>
 </table>
 </section>
 """)

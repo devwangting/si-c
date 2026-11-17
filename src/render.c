@@ -786,29 +786,8 @@ static void cf_draw_box(CfCell *cv, int w, int h, CfNode *n, int scroll,
 
 static void cf_function_name(const char *sig, char *out, size_t outsz)
 {
-    const char *p = strchr(sig, '(');
-    const char *end;
-    const char *start;
-    size_t n;
-
-    if (!p)
-        p = sig + strlen(sig);
-    end = p;
-    while (end > sig && isspace((unsigned char)end[-1]))
-        end--;
-    start = end;
-    while (start > sig &&
-           (isalnum((unsigned char)start[-1]) || start[-1] == '_'))
-        start--;
-    n = (size_t)(end - start);
-    if (n == 0) {
-        snprintf(out, outsz, "%s", sig);
-        return;
-    }
-    if (n >= outsz)
-        n = outsz - 1;
-    memcpy(out, start, n);
-    out[n] = '\0';
+    if (!symbol_short_name(sig, out, outsz))
+        snprintf(out, outsz, "%s", sig ? sig : "");
 }
 
 static void draw_relations_missing(App *a, Str *out, int top, int pane_h)

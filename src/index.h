@@ -154,6 +154,7 @@ void project_free(Project *p);
 
 const char *symbol_kind_name(SymbolKind kind);
 const char *symbol_kind_short(SymbolKind kind);
+bool symbol_short_name(const char *signature, char *out, size_t out_size);
 
 void project_file_symbols(Project *p, int file_index, IntList *out);
 void project_find_symbols(Project *p, const char *name, IntList *out);

@@ -139,6 +139,23 @@ void Thing::method() {}
 int Thing::count = 0;
 void demo_ns::NsThing::ns_method() {}
 
+class AlphaThing {
+public:
+    void ping();
+    void call();
+};
+
+class BetaThing {
+public:
+    void ping();
+    void call();
+};
+
+void AlphaThing::ping() {}
+void BetaThing::ping() {}
+void AlphaThing::call() { ping(); }
+void BetaThing::call() { ping(); }
+
 int thing_demo(void)
 {
     Thing thing;
