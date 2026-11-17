@@ -9,6 +9,7 @@ typedef struct {
     int file_index;
     int line;
     int col;
+    bool is_reference;
 } CallEdge;
 
 struct CallGraph {
@@ -19,7 +20,7 @@ struct CallGraph {
 
 static void callgraph_free(CallGraph *g);
 static void callgraph_add(CallGraph *g, int caller, int callee, int fi,
-                          int line, int col);
+                          int line, int col, bool is_reference);
 
 /* ------------------------------------------------------------------ */
 /* Lists                                                               */
@@ -2403,7 +2404,7 @@ void project_free(Project *p)
 /* ------------------------------------------------------------------ */
 
 #define SI_CACHE_MAGIC "SICACH2\0"
-#define SI_CACHE_VERSION 2u
+#define SI_CACHE_VERSION 3u
 
 static bool cache_write(FILE *f, const void *data, size_t len)
 {
@@ -2536,7 +2537,8 @@ bool project_cache_save(const Project *p, char **err)
                  cache_i32(f, e->callee) &&
                  cache_i32(f, e->file_index) &&
                  cache_i32(f, e->line) &&
-                 cache_i32(f, e->col);
+                 cache_i32(f, e->col) &&
+                 cache_u32(f, e->is_reference ? 1u : 0u);
         }
     }
     for (i = 0; ok && i < p->var_use_count; i++) {
@@ -2685,13 +2687,16 @@ static bool project_cache_load(Project *p, const char *root,
         p->call_graph = xcalloc(1, sizeof(*p->call_graph));
         for (i = 0; i < nedges; i++) {
             int32_t caller, callee, fi, line, col;
+            uint32_t is_reference;
             if (!cache_rd_i32(f, &caller) || !cache_rd_i32(f, &callee) ||
                 !cache_rd_i32(f, &fi) || !cache_rd_i32(f, &line) ||
-                !cache_rd_i32(f, &col)) {
+                !cache_rd_i32(f, &col) ||
+                !cache_rd_u32(f, &is_reference)) {
                 ok = false;
                 break;
             }
-            callgraph_add(p->call_graph, caller, callee, fi, line, col);
+            callgraph_add(p->call_graph, caller, callee, fi, line, col,
+                          is_reference != 0);
             if (progress && (i % 4096) == 0)
                 progress(ud, nfiles, nsyms, "reading .si-index");
         }
@@ -2922,26 +2927,35 @@ static int enclosing_function(Project *p, int file_index, int line)
     return best;
 }
 
-static int callable_symbol(Project *p, const char *name, int file_index)
+static int callable_symbol(Project *p, Symbol **funcs, size_t nfuncs,
+                           const char *name, int file_index)
 {
+    size_t lo = 0;
+    size_t hi = nfuncs;
     size_t i;
     int first_def = -1;
     int prototype = -1;
     int same_file_proto = -1;
-    for (i = 0; i < p->sym_count; i++) {
-        Symbol *s = &p->syms[i];
-        if (strcmp(s->name, name) != 0)
-            continue;
+
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        if (strcmp(funcs[mid]->name, name) < 0)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    for (i = lo; i < nfuncs && strcmp(funcs[i]->name, name) == 0; i++) {
+        Symbol *s = funcs[i];
         if (s->kind == SYM_FUNCTION) {
             if (s->file_index == file_index)
-                return (int)i;
+                return (int)(s - p->syms);
             if (first_def < 0)
-                first_def = (int)i;
+                first_def = (int)(s - p->syms);
         } else if (s->kind == SYM_PROTOTYPE) {
             if (prototype < 0)
-                prototype = (int)i;
+                prototype = (int)(s - p->syms);
             if (s->file_index == file_index && same_file_proto < 0)
-                same_file_proto = (int)i;
+                same_file_proto = (int)(s - p->syms);
         }
     }
     if (first_def >= 0)
@@ -2978,7 +2992,7 @@ static bool int_contains(const IntList *l, int value)
 }
 
 static void callgraph_add(CallGraph *g, int caller, int callee, int fi,
-                          int line, int col)
+                          int line, int col, bool is_reference)
 {
     size_t i;
     if (caller == callee)
@@ -2986,7 +3000,8 @@ static void callgraph_add(CallGraph *g, int caller, int callee, int fi,
     for (i = 0; i < g->count; i++) {
         CallEdge *e = &g->items[i];
         if (e->caller == caller && e->callee == callee &&
-            e->file_index == fi && e->line == line && e->col == col)
+            e->file_index == fi && e->line == line && e->col == col &&
+            e->is_reference == is_reference)
             return;
     }
     if (g->count == g->cap) {
@@ -2998,6 +3013,7 @@ static void callgraph_add(CallGraph *g, int caller, int callee, int fi,
     g->items[g->count].file_index = fi;
     g->items[g->count].line = line;
     g->items[g->count].col = col;
+    g->items[g->count].is_reference = is_reference;
     g->count++;
 }
 
@@ -3066,20 +3082,28 @@ static bool build_call_graph(Project *p, CallGraph *g,
 {
     size_t fi;
     Symbol **vars = NULL;
+    Symbol **funcs = NULL;
     size_t nvars = 0;
+    size_t nfuncs = 0;
     size_t vi;
 
     memset(g, 0, sizeof(*g));
 
-    /* Build a name-sorted table of global variables for O(log n) lookups. */
+    /* Build name-sorted tables for O(log n) variable/function lookups. */
     if (p->sym_count) {
         vars = xmalloc(p->sym_count * sizeof(*vars));
+        funcs = xmalloc(p->sym_count * sizeof(*funcs));
         for (vi = 0; vi < p->sym_count; vi++) {
             if (p->syms[vi].kind == SYM_VARIABLE)
                 vars[nvars++] = &p->syms[vi];
+            else if (p->syms[vi].kind == SYM_FUNCTION ||
+                     p->syms[vi].kind == SYM_PROTOTYPE)
+                funcs[nfuncs++] = &p->syms[vi];
         }
         if (nvars > 1)
             qsort(vars, nvars, sizeof(*vars), cmp_symbol_name_ptr);
+        if (nfuncs > 1)
+            qsort(funcs, nfuncs, sizeof(*funcs), cmp_symbol_name_ptr);
     }
 
     for (fi = 0; fi < p->file_count; fi++) {
@@ -3135,30 +3159,58 @@ static bool build_call_graph(Project *p, CallGraph *g,
                       lx.toks[ti + 1].kind == TK_PUNCT &&
                       src[lx.toks[ti + 1].start] == '(';
 
-            if (is_call) {
-                if (call_reserved(src + t->start, t->len))
-                    continue;
-                caller = &p->syms[cur_sym];
-                if ((size_t)t->len == strlen(caller->name) &&
-                    memcmp(src + t->start, caller->name,
-                           (size_t)t->len) == 0)
-                    continue; /* self-recursion is not a useful edge */
-                {
-                    char *name = xstrndup(src + t->start,
-                                          (size_t)t->len);
-                    ci = callable_symbol(p, name, (int)fi);
-                    free(name);
+            {
+                bool member_access = false;
+                bool handled = false;
+                if (ti > 0) {
+                    if (tok_is_punct(src, &lx.toks[ti - 1], '.')) {
+                        member_access = true;
+                    } else if (tok_is_punct(src, &lx.toks[ti - 1], '>') &&
+                               ti > 1 &&
+                               tok_is_punct(src, &lx.toks[ti - 2], '-')) {
+                        member_access = true;
+                    }
                 }
-                if (ci >= 0)
-                    callgraph_add(g, cur_sym, ci, (int)fi,
-                                  t->line, t->col);
-            } else if (nvars > 0) {
-                char *name = xstrndup(src + t->start, (size_t)t->len);
-                int var = lookup_global_variable(p, vars, nvars, name);
-                free(name);
-                if (var >= 0)
-                    varuse_add(p, var, cur_sym, (int)fi,
-                               t->line, t->col);
+                if (is_call) {
+                    if (call_reserved(src + t->start, t->len))
+                        continue;
+                    caller = &p->syms[cur_sym];
+                    if ((size_t)t->len == strlen(caller->name) &&
+                        memcmp(src + t->start, caller->name,
+                               (size_t)t->len) == 0)
+                        continue; /* self-recursion is not a useful edge */
+                    {
+                        char *name = xstrndup(src + t->start,
+                                              (size_t)t->len);
+                        ci = callable_symbol(p, funcs, nfuncs, name, (int)fi);
+                        free(name);
+                    }
+                    if (ci >= 0)
+                        callgraph_add(g, cur_sym, ci, (int)fi,
+                                      t->line, t->col, false);
+                } else {
+                    if (nvars > 0) {
+                        char *name = xstrndup(src + t->start,
+                                              (size_t)t->len);
+                        int var = lookup_global_variable(p, vars, nvars, name);
+                        free(name);
+                        if (var >= 0) {
+                            varuse_add(p, var, cur_sym, (int)fi,
+                                       t->line, t->col);
+                            handled = true;
+                        }
+                    }
+                    if (!handled && !member_access && nfuncs > 0 &&
+                        !call_reserved(src + t->start, t->len)) {
+                        char *name = xstrndup(src + t->start,
+                                              (size_t)t->len);
+                        ci = callable_symbol(p, funcs, nfuncs, name, (int)fi);
+                        free(name);
+                        if (ci >= 0)
+                            callgraph_add(g, cur_sym, ci, (int)fi,
+                                          t->line, t->col, true);
+                    }
+                }
             }
         }
         lex_free(&lx);
@@ -3166,10 +3218,12 @@ static bool build_call_graph(Project *p, CallGraph *g,
         if (progress &&
             !progress(ud, fi + 1, p->sym_count, p->files[fi].rel)) {
             free(vars);
+            free(funcs);
             return false;
         }
     }
     free(vars);
+    free(funcs);
     return true;
 }
 
@@ -3247,27 +3301,40 @@ static void graph_callees(const CallGraph *g, int caller, IntList *out)
     }
 }
 
+static void caller_preview(Project *p, const CallEdge *e, char *buf,
+                           size_t size)
+{
+    Symbol *s = &p->syms[e->caller];
+    snprintf(buf, size, "%s%s", s->signature,
+             e->is_reference ? "  [ref]" : "");
+}
+
 static void caller_tree_walk(Project *p, const CallGraph *g, int symbol_index,
                              int depth, int max_depth, IntList *seen,
                              LocationList *out, int *nodes)
 {
     size_t i;
+    int pass;
     if (depth >= max_depth || *nodes >= 200)
         return;
-    for (i = 0; i < g->count && *nodes < 200; i++) {
-        const CallEdge *e = &g->items[i];
-        Symbol *s;
-        if (e->callee != symbol_index)
-            continue;
-        if (int_contains(seen, e->caller))
-            continue;
-        intlist_push(seen, e->caller);
-        s = &p->syms[e->caller];
-        loclist_push_depth(out, e->file_index, e->line, e->col, depth + 1,
-                           s->signature);
-        (*nodes)++;
-        caller_tree_walk(p, g, e->caller, depth + 1, max_depth, seen, out,
-                         nodes);
+    for (pass = 0; pass < 2; pass++) {
+        for (i = 0; i < g->count && *nodes < 200; i++) {
+            const CallEdge *e = &g->items[i];
+            char preview[512];
+            if (e->callee != symbol_index)
+                continue;
+            if (e->is_reference != (pass == 0))
+                continue;
+            if (int_contains(seen, e->caller))
+                continue;
+            intlist_push(seen, e->caller);
+            caller_preview(p, e, preview, sizeof(preview));
+            loclist_push_depth(out, e->file_index, e->line, e->col,
+                               depth + 1, preview);
+            (*nodes)++;
+            caller_tree_walk(p, g, e->caller, depth + 1, max_depth, seen,
+                             out, nodes);
+        }
     }
 }
 
@@ -3330,6 +3397,7 @@ bool project_context(Project *p, int symbol_index, SymbolContext *ctx)
     IntList callee_ids;
     CallGraph *graph;
     size_t i;
+    int pass;
 
     if (!p || !ctx || symbol_index < 0 ||
         (size_t)symbol_index >= p->sym_count)
@@ -3352,16 +3420,21 @@ bool project_context(Project *p, int symbol_index, SymbolContext *ctx)
         return false;
     }
     if (sym->kind == SYM_FUNCTION) {
-        for (i = 0; i < graph->count; i++) {
-            const CallEdge *e = &graph->items[i];
-            Symbol *caller;
-            if (e->callee != symbol_index ||
-                int_contains(&caller_ids, e->caller))
-                continue;
-            intlist_push(&caller_ids, e->caller);
-            caller = &p->syms[e->caller];
-            loclist_push(&ctx->callers, e->file_index, e->line, e->col,
-                         caller->signature);
+        for (pass = 0; pass < 2; pass++) {
+            for (i = 0; i < graph->count; i++) {
+                const CallEdge *e = &graph->items[i];
+                char preview[512];
+                if (e->callee != symbol_index)
+                    continue;
+                if (e->is_reference != (pass == 0))
+                    continue;
+                if (int_contains(&caller_ids, e->caller))
+                    continue;
+                intlist_push(&caller_ids, e->caller);
+                caller_preview(p, e, preview, sizeof(preview));
+                loclist_push(&ctx->callers, e->file_index, e->line, e->col,
+                             preview);
+            }
         }
         graph_callees(graph, symbol_index, &callee_ids);
     } else {

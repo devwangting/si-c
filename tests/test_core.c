@@ -226,7 +226,53 @@ static void test_project(const char *root)
                   "caller route depth");
             check(tree.count > 0 && tree.items[0].line == 19,
                   "caller route points at call site");
+            check(tree.count > 0 && tree.items[0].preview != NULL &&
+                  strstr(tree.items[0].preview, "[ref]") == NULL,
+                  "direct call is not marked as a reference");
             loclist_free(&tree);
+        }
+        {
+            int cb_idx = -1;
+            IntList cids;
+            LocationList tree;
+            size_t j;
+            bool saw_register = false;
+            bool saw_signal = false;
+            intlist_init(&cids);
+            project_find_symbols(&p, "callback_target", &cids);
+            for (j = 0; j < cids.count; j++) {
+                if (p.syms[cids.items[j]].kind == SYM_FUNCTION)
+                    cb_idx = cids.items[j];
+            }
+            intlist_free(&cids);
+            check(cb_idx >= 0, "callback target function found");
+            if (cb_idx >= 0) {
+                check(project_context(&p, cb_idx, &ctx),
+                      "callback target context");
+                check(ctx.callers.count == 2,
+                      "callback target has two reference callers");
+                for (j = 0; j < ctx.callers.count; j++) {
+                    const char *p = ctx.callers.items[j].preview;
+                    check(p != NULL && strstr(p, "[ref]") != NULL,
+                          "reference caller marked [ref]");
+                    if (p && strstr(p, "callback_register_demo") != NULL)
+                        saw_register = true;
+                    if (p && strstr(p, "callback_signal_demo") != NULL)
+                        saw_signal = true;
+                }
+                check(saw_register, "function pointer assignment is a reference");
+                check(saw_signal, "signal registration is a reference");
+                symbol_context_free(&ctx);
+                check(project_caller_tree(&p, cb_idx, &tree, 8),
+                      "callback caller tree");
+                check(tree.count == 2, "callback tree has two nodes");
+                for (j = 0; j < tree.count; j++) {
+                    check(tree.items[j].preview != NULL &&
+                          strstr(tree.items[j].preview, "[ref]") != NULL,
+                          "callback tree node marked [ref]");
+                }
+                loclist_free(&tree);
+            }
         }
         {
             int add_idx = -1;
@@ -387,6 +433,31 @@ static void test_project(const char *root)
         check(cached.sym_count > 0, "cached symbols");
         check(project_call_edge_count(&cached) > 0,
               "cached call edges");
+        {
+            IntList cids;
+            int cb_idx = -1;
+            size_t j;
+            intlist_init(&cids);
+            project_find_symbols(&cached, "callback_target", &cids);
+            for (j = 0; j < cids.count; j++) {
+                if (cached.syms[cids.items[j]].kind == SYM_FUNCTION)
+                    cb_idx = cids.items[j];
+            }
+            intlist_free(&cids);
+            check(cb_idx >= 0, "cached callback target found");
+            if (cb_idx >= 0) {
+                SymbolContext cctx;
+                check(project_context(&cached, cb_idx, &cctx),
+                      "cached callback context");
+                check(cctx.callers.count == 2,
+                      "cached reference callers preserved");
+                check(cctx.callers.count > 0 &&
+                      cctx.callers.items[0].preview != NULL &&
+                      strstr(cctx.callers.items[0].preview, "[ref]") != NULL,
+                      "cached reference marker preserved");
+                symbol_context_free(&cctx);
+            }
+        }
         project_free(&cached);
         remove(cache);
         free(cache);

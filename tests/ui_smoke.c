@@ -459,6 +459,31 @@ int main(int argc, char **argv)
                   "clicking a call-flow box jumps to call site");
         }
     }
+    {
+        BufMatch rm;
+        size_t vi;
+        bool saw_ref = false;
+        bool saw_signal = false;
+        check(buf_find(b, "signal(SIGINT, callback_target)", 0, true,
+                       false, &rm),
+              "find signal registration");
+        b->cursor = (int)(rm.pos + strlen("signal(SIGINT, "));
+        app_update_info(&a);
+        app_show_context(&a);
+        check(a.view.kind == VIEW_CONTEXT &&
+                  strstr(a.view.title, "callback_target") != NULL,
+              "registered callback call flow");
+        for (vi = 0; vi < a.view.count; vi++) {
+            const char *label = a.view.items[vi].label;
+            if (strstr(label, "[ref]") != NULL)
+                saw_ref = true;
+            if (strstr(label, "callback_signal_demo") != NULL)
+                saw_signal = true;
+        }
+        check(saw_ref, "call flow marks registered callback as [ref]");
+        check(saw_signal, "call flow shows registering function");
+        app_render(&a); /* exercise reference caller rendering */
+    }
 
     len_before = b->len;
     key(&a, KEY_F1, NULL);

@@ -81,3 +81,21 @@ int completion_demo(void)
 enum class CompletionMode;
 enum class CompletionMode2 : unsigned;
 
+static int callback_target(int x)
+{
+    return x;
+}
+
+int callback_register_demo(void)
+{
+    void (*fn)(int) = callback_target;
+    (void)fn;
+    return 0;
+}
+
+int callback_signal_demo(void)
+{
+    signal(SIGINT, callback_target);
+    return 0;
+}
+

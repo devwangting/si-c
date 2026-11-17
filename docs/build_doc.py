@@ -436,7 +436,7 @@ parts.append("""
 <tr><td><code>Symbol</code></td><td>名称、签名、种类（函数/变量/宏/类型）、文件、行、列、结束行</td></tr>
 <tr><td><code>View</code> / <code>ViewItem</code></td><td>右侧列表的可显示项：标签、详情、跳转位置、缩进层级</td></tr>
 <tr><td><code>LocalVar</code></td><td>函数内局部变量/参数：名称、类型、声明行、作用域结束行</td></tr>
-<tr><td><code>CallEdge</code></td><td>调用图边：caller、callee、调用发生的文件/行/列</td></tr>
+<tr><td><code>CallEdge</code></td><td>调用/引用图边：caller、callee、文件/行/列，<code>is_reference</code> 区分直接调用与函数值引用</td></tr>
 </table>
 </section>
 """)
@@ -1143,8 +1143,8 @@ parts.append("""
 <tr><td><code>parse_variables</code></td><td>全局变量</td><td>文件作用域、类型前缀、分号结束</td></tr>
 </table>
 
-<h3>7.3 调用图：为什么不能靠“同名引用”</h3>
-<p>旧实现把所有同名标识符引用都当成调用，结果变量名、函数名相同就会生成假调用边，递归还可能出现很多重复 <code>main</code>。现在只扫描函数体中的真实调用表达式。</p>
+<h3>7.3 调用图：直接调用 + 函数值引用</h3>
+<p>旧实现把所有同名标识符引用都当成调用，结果变量名、函数名相同就会生成假调用边，递归还可能出现很多重复 <code>main</code>。现在扫描函数体里的两类关系：直接调用 <code>name(</code>，以及函数名作为值出现（函数指针、<code>signal(SIGINT, handler)</code>、<code>std::thread</code> 参数等）。后者存成 <code>is_reference</code> 边，CALL FLOW 显示 <code>[ref]</code>，不会伪装成普通调用。</p>
 """)
 parts.append(code("build_call_graph() 的核心", r'''
 for (每个文件) {
@@ -1163,21 +1163,23 @@ for (每个文件) {
                 in_body = true;   /* 进入函数体 */
 
             if (!in_body)
-                continue;         /* 签名行不计调用 */
+                continue;         /* 签名行不计 */
 
             if (t 是标识符 && 下一个 token 是 '(' &&
                 不是 if/for/while/sizeof 等关键字) {
-
                 callee = callable_symbol(p, name, current_file);
-
                 if (callee >= 0)
-                    callgraph_add(graph, cur_func, callee,
-                                  file, t->line, t->col);
+                    callgraph_add(..., is_reference=false);
+            } else if (t 是标识符 && 不是 obj.member / obj->member) {
+                /* 先让同名全局变量优先；否则查函数名 */
+                if (不是全局变量 &&
+                    (callee = callable_symbol(p, name, current_file)) >= 0)
+                    callgraph_add(..., is_reference=true);
             }
         }
     }
 }
-''', "调用边同时保存调用发生的 file/line/col，所以点击调用链能跳到调用点，而不是被调用函数的定义行。"))
+''', "调用/引用边都保存 file/line/col，所以点击调用链能跳到调用或注册发生的位置。"))
 parts.append(code("caller_tree_walk()：反向查找调用者", r'''
 static void caller_tree_walk(Project *p, CallGraph *g,
                              int symbol, int depth,
@@ -1204,7 +1206,7 @@ static void caller_tree_walk(Project *p, CallGraph *g,
     }
 }
 '''))
-parts.append(note("warn", "调用图仍是按函数名近似：不做重载解析、虚函数分派、函数指针分析、宏展开。同名 static 函数会优先匹配同文件定义，但跨文件同名全局函数仍可能歧义。"))
+parts.append(note("warn", "调用图仍是按函数名近似：不做重载解析、虚函数分派、宏展开，也不跟踪“先存到函数指针变量/结构体、之后再注册”的间接关系；<code>[ref]</code> 只覆盖函数体里的直接函数值引用。同名 static 函数会优先匹配同文件定义，但跨文件同名全局函数仍可能歧义。"))
 
 parts.append("""
 <h3>7.4 局部变量遮蔽</h3>
@@ -1262,7 +1264,7 @@ parts.append("""
 <tr><td>只有第一行有语法高亮</td><td>语法 span 使用文件绝对偏移，渲染却按行内相对偏移比较</td><td><code>syntax_line_spans()</code> 减去行起点，改成行内相对 span</td></tr>
 <tr><td>全局变量没有颜色</td><td>空白和标识符 span 被合并，语义阶段看到的是带空格的一整段</td><td>普通 span 不再合并，逐个标识符判断</td></tr>
 <tr><td>同名局部变量仍显示全局红色</td><td>语义颜色只查全局表，没有作用域判断</td><td>建立函数级 <code>LocalVar</code> 表，局部优先</td></tr>
-<tr><td>调用链出现很多重复 main</td><td>用“所有同名引用”推调用者，变量同名也变成边；递归没有全局去重</td><td>只扫描函数体内 <code>name(</code>；边保存调用点；seen 去重</td></tr>
+<tr><td>调用链出现很多重复 main</td><td>用“所有同名引用”推调用者，变量同名也变成边；递归没有全局去重</td><td>扫描函数体内直接调用 <code>name(</code> 和函数值引用；边保存位置；<code>[ref]</code> 标记；seen 去重</td></tr>
 <tr><td>同名函数无法区分</td><td>按名字查符号只返回第一个</td><td>收集所有定义，弹 <code>SELECT DEFINITION</code>，选完固定 context_sym</td></tr>
 <tr><td>点击调用链跳到函数开头</td><td>节点只保存函数定义位置</td><td>CallEdge 记录调用点 file/line/col，节点位置用调用点</td></tr>
 <tr><td>光标渲染时到处闪</td><td>整帧绘制过程中真实终端光标可见，被每个 sgr_move 带着跑</td><td>绘制前 <code>?25l</code> 隐藏，结束后定位再 <code>?25h</code></td></tr>
@@ -1344,9 +1346,9 @@ parts.append("""
 <tr><td>index.c:828</td><td>parse_functions</td><td>函数定义/原型识别</td></tr>
 <tr><td>index.c:1356</td><td>parse_source</td><td>单文件解析入口</td></tr>
 <tr><td>index.c:2298</td><td>project_load</td><td>扫描项目、建立符号索引</td></tr>
-<tr><td>index.c:3064</td><td>build_call_graph</td><td>真实调用关系图</td></tr>
-<tr><td>index.c:3274</td><td>project_caller_tree</td><td>反向调用者树</td></tr>
-<tr><td>index.c:3325</td><td>project_context</td><td>调用者/被调用者/引用数</td></tr>
+<tr><td>index.c:3080</td><td>build_call_graph</td><td>调用/函数值引用关系图</td></tr>
+<tr><td>index.c:3341</td><td>project_caller_tree</td><td>反向调用者树</td></tr>
+<tr><td>index.c:3392</td><td>project_context</td><td>调用者/被调用者/引用数</td></tr>
 </table>
 </section>
 """)
