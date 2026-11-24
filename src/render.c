@@ -2552,29 +2552,44 @@ static void draw_completion(App *a, Str *out)
 /* Help overlay                                                        */
 /* ------------------------------------------------------------------ */
 
+#define SI_HELP_COLS 4
+#define SI_HELP_ROWS 10
+
+static const char *const help_lines[SI_HELP_ROWS * SI_HELP_COLS] = {
+    "F1  Help",          "F2  Outline",       "F3  Find next",
+    "F4  Find prev",     "F5  Reindex",       "F6  Format",
+    "F7  Files",         "F8  Highlight",     "F9  Next file",
+    "F10 Back",          "F12 Definition",    "Ctrl+A Save all",
+    "Ctrl+C Copy",       "Ctrl+D Delete",     "Ctrl+E End line",
+    "Ctrl+F Find",       "Ctrl+F3 Flow",      "Ctrl+F4 Editor",
+    "Ctrl+F5 Compile",   "Ctrl+F10 Fwd",      "Ctrl+G Goto line",
+    "Ctrl+H Help",       "Ctrl+K Kill line",  "Ctrl+N New proj",
+    "Ctrl+O Open proj",  "Ctrl+P Symbols",    "Ctrl+Q Quit",
+    "Ctrl+R Call flow",  "Ctrl+S Save",       "Ctrl+T Cycle focus",
+    "Ctrl+U Kill start", "Ctrl+V Paste",      "Ctrl+Y Redo",
+    "Ctrl+Z Undo",       "Alt/Opt+M Menu",    "Alt/Opt+R Rebuild",
+    "Enter Confirm",     "Esc Cancel",        "PgUp/PgDn Scroll",
+    "Tab/Shift+Tab"
+};
+
+int app_help_line_count(void)
+{
+    return (int)SI_ARRAY_LEN(help_lines);
+}
+
+const char *app_help_line(int index)
+{
+    if (index < 0 || (size_t)index >= SI_ARRAY_LEN(help_lines))
+        return "";
+    return help_lines[index];
+}
+
 static void draw_help(App *a, Str *out)
 {
-    enum { HELP_COLS = 4, HELP_ROWS = 10 };
-    static const char *const lines[HELP_ROWS * HELP_COLS] = {
-        "F1  Help",         "F2  Outline",       "Ctrl+F3 Flow",
-        "Ctrl+F4 Editor",   "F5  Reindex",       "F6  Format",
-        "F7  Files",        "F8  Highlight",     "F9  Next file",
-        "F10 Back",         "Alt/Opt+M Menu",    "F12 Definition",
-        "Ctrl+F10 Fwd",     "Ctrl+A Save all",   "F3  Find next",
-        "Ctrl+C Copy",      "Ctrl+D Delete",     "Ctrl+E End line",
-        "Ctrl+F Find",      "Ctrl+G Goto line",  "Ctrl+H Help",
-        "Ctrl+K Kill line", "F4  Find prev",     "Ctrl+N New proj",
-        "Ctrl+O Open proj", "Ctrl+P Symbols",    "Ctrl+Q Quit",
-        "Ctrl+R Call flow", "Ctrl+S Save",       "Ctrl+T Cycle focus",
-        "Ctrl+U Kill start","Ctrl+V Paste",      "Ctrl+Y Redo",
-        "Ctrl+Z Undo",      "Alt/Opt+R Rebuild", "Tab/Shift+Tab",
-        "Ctrl+F5 Compile",  "Enter Confirm",     "Esc Cancel",
-        "PgUp/PgDn Scroll"
-    };
-    int max_col_w = (a->cols - 5) / HELP_COLS;
+    int max_col_w = (a->cols - 5) / SI_HELP_COLS;
     int col_w = SI_MIN(22, max_col_w);
     int boxw;
-    int boxh = HELP_ROWS + 4;
+    int boxh = SI_HELP_ROWS + 4;
     int x;
     int y;
     int c;
@@ -2584,7 +2599,7 @@ static void draw_help(App *a, Str *out)
         return;
     if (col_w < 12)
         col_w = 12;
-    boxw = 1 + HELP_COLS * col_w + HELP_COLS;
+    boxw = 1 + SI_HELP_COLS * col_w + SI_HELP_COLS;
     if (boxw > a->cols - 2)
         return;
     x = (a->cols - boxw) / 2;
@@ -2596,11 +2611,11 @@ static void draw_help(App *a, Str *out)
         sgr_fg(out, a->theme.border);
         if (r == 0 || r == boxh - 1) {
             str_puts(out, r == 0 ? "\xe2\x94\x8c" : "\xe2\x94\x94");
-            for (c = 0; c < HELP_COLS; c++) {
+            for (c = 0; c < SI_HELP_COLS; c++) {
                 int j;
                 for (j = 0; j < col_w; j++)
                     str_puts(out, "\xe2\x94\x80");
-                if (c < HELP_COLS - 1)
+                if (c < SI_HELP_COLS - 1)
                     str_puts(out, r == 0 ? "\xe2\x94\xac" : "\xe2\x94\xb4");
             }
             str_puts(out, r == 0 ? "\xe2\x94\x90" : "\xe2\x94\x98");
@@ -2615,25 +2630,25 @@ static void draw_help(App *a, Str *out)
             str_puts(out, "\xe2\x94\x82");
         } else if (r == 2) {
             str_puts(out, "\xe2\x94\x9c");
-            for (c = 0; c < HELP_COLS; c++) {
+            for (c = 0; c < SI_HELP_COLS; c++) {
                 int j;
                 for (j = 0; j < col_w; j++)
                     str_puts(out, "\xe2\x94\x80");
-                if (c < HELP_COLS - 1)
+                if (c < SI_HELP_COLS - 1)
                     str_puts(out, "\xe2\x94\xbc");
             }
             str_puts(out, "\xe2\x94\xa4");
         } else {
             int row = r - 3;
             str_puts(out, "\xe2\x94\x82");
-            for (c = 0; c < HELP_COLS; c++) {
-                int li = c * HELP_ROWS + row;
+            for (c = 0; c < SI_HELP_COLS; c++) {
+                int li = row * SI_HELP_COLS + c;
                 int cell = col_w - 1;
                 int used;
                 str_putc(out, ' ');
                 sgr_fg(out, a->theme.fg);
-                used = draw_text(out, lines[li], strlen(lines[li]),
-                                 cell, false);
+                used = draw_text(out, help_lines[li],
+                                 strlen(help_lines[li]), cell, false);
                 if (used < cell)
                     draw_spaces(out, cell - used);
                 sgr_fg(out, a->theme.border);

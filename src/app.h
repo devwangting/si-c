@@ -400,4 +400,7 @@ const char *app_menu_item_key(int group, int index);
 int app_menu_group_at(App *a, int x);
 int app_menu_group_width(int group);
 
+int app_help_line_count(void);
+const char *app_help_line(int index);
+
 #endif /* SI_APP_H */

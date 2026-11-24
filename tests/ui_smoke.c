@@ -504,6 +504,18 @@ int main(int argc, char **argv)
     }
 
     len_before = b->len;
+    check(app_help_line_count() == 40, "help has 40 entries");
+    check(strcmp(app_help_line(0), "F1  Help") == 0,
+          "help starts with F1");
+    check(strcmp(app_help_line(2), "F3  Find next") == 0,
+          "help lists F3 in order");
+    check(strcmp(app_help_line(3), "F4  Find prev") == 0,
+          "help lists F4 in order");
+    check(strcmp(app_help_line(9), "F10 Back") == 0,
+          "help first column ends with F10");
+    check(strcmp(app_help_line(10), "F12 Definition") == 0,
+          "help continues with F12");
+
     key(&a, KEY_F1, NULL);
     check(a.help, "help opened");
     app_render(&a);

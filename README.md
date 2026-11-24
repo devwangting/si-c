@@ -470,7 +470,7 @@ Results:
 ```text
 test_core: 364 checks, 0 failures
 test_keys:  32 checks, 0 failures
-ui_smoke:  368 checks, 0 failures
+ui_smoke:  374 checks, 0 failures
 ```
 
 On macOS, `test_keys` also includes Option-key cases, so the check count differs from this

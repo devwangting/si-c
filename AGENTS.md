@@ -25,7 +25,7 @@
 - Makefile 的 `%.o: %.c` 不跟踪头文件依赖：改过 `.h` 后执行 `make clean && make -j`，否则可能链接旧对象。
 - 新增 `.c` 时必须同时加入 Makefile 的 `SRC`，以及测试所需的 `CORE` / `UI_CORE`，否则主程序或测试会漏符号。
 - 编译选项是 `-std=c11 -Wall -Wextra -Wpedantic`；当前 GCC 下已有少量 `-Wformat-truncation` 警告（`util.c` / `render.c` / `app.c`），目标是不要新增警告。
-- Linux 当前实测：test_core 364、test_keys 32、ui_smoke 368。`test_keys` 的 macOS Option 用例在 `#if defined(__APPLE__)` 内，数量会与本机不同。`ui_smoke` 会真实调用 C 编译器：一次编译 `tests/fixtures/demo`（该 fixture 故意混用 C/C++ 语法，预期失败），一次在临时目录编译最小程序（预期成功），并清理 `build/`。
+- Linux 当前实测：test_core 364、test_keys 32、ui_smoke 374。`test_keys` 的 macOS Option 用例在 `#if defined(__APPLE__)` 内，数量会与本机不同。`ui_smoke` 会真实调用 C 编译器：一次编译 `tests/fixtures/demo`（该 fixture 故意混用 C/C++ 语法，预期失败），一次在临时目录编译最小程序（预期成功），并清理 `build/`。
 
 ## 运行时主流程
 
