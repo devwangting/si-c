@@ -12,10 +12,10 @@ LDLIBS  ?=
 PREFIX  ?= /usr/local
 BINDIR  ?= $(PREFIX)/bin
 
-SRC = src/util.c src/text.c src/syntax.c src/index.c src/term.c src/app.c \
-      src/render.c src/main.c
+SRC = src/util.c src/text.c src/syntax.c src/index.c src/compile.c \
+      src/term.c src/app.c src/render.c src/main.c
 OBJ = $(SRC:.c=.o)
-CORE = src/util.c src/text.c src/syntax.c src/index.c
+CORE = src/util.c src/text.c src/syntax.c src/index.c src/compile.c
 UI_CORE = $(CORE) src/term.c src/app.c src/render.c
 
 all: si

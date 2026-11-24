@@ -1246,6 +1246,15 @@ int main(int argc, char **argv)
     }
 
     /* Menu, project switching, and the ANSI formatter. */
+    check(APP_MENU_GROUPS == 5, "menu has five groups");
+    check(strcmp(app_menu_group_name(2), "Compile") == 0,
+          "Compile menu group is present");
+    check(strcmp(app_menu_item_label(2, 0), "Compile Project") == 0,
+          "Compile menu has Compile Project");
+    check(strcmp(app_menu_item_key(2, 0), "Ctrl+F5") == 0,
+          "Compile Project shows Ctrl+F5");
+    check(strcmp(app_menu_item_key(2, 1), "Ctrl+Q") == 0,
+          "Compile menu has Ctrl+Q Quit");
     key(&a, KEY_ALT_CHAR, "m");
     check(a.menu_active, "Alt+M opens menu");
     app_render(&a);
@@ -1339,6 +1348,72 @@ int main(int argc, char **argv)
         check(!buf_is_dirty(fb), "formatted buffer saved");
         remove(tmp);
     }
+
+    /* Compile window: the fixture mixes C and C++ syntax, so cc reports
+     * errors; this exercises the real child process and output capture. */
+    key(&a, KEY_CTRL_F5, NULL);
+    check(a.compile_active, "Ctrl+F5 opens compile window");
+    check(!a.compile_running, "compile process has finished");
+    check(!a.compile_ok && a.compile_exit != 0,
+          "fixture compile reports failure");
+    check(a.compile_log.data && strstr(a.compile_log.data, "error") != NULL,
+          "compile window captures compiler errors");
+    app_render(&a);
+    check(a.compile_popup_w > 0 && a.compile_popup_h > 0,
+          "compile window has geometry");
+    check(a.compile_popup_x == (a.cols - a.compile_popup_w) / 2 &&
+          a.compile_popup_y == (a.rows - a.compile_popup_h) / 2,
+          "compile window is centered");
+    check(a.compile_popup_x >= 0 &&
+          a.compile_popup_x + a.compile_popup_w <= a.cols &&
+          a.compile_popup_y >= 0 &&
+          a.compile_popup_y + a.compile_popup_h <= a.rows,
+          "compile window stays on screen");
+    check(a.compile_visible_rows > 0, "compile window shows output rows");
+    str_clear(&a.compile_log);
+    {
+        int li;
+        for (li = 0; li < 200; li++)
+            str_printf(&a.compile_log, "compile output line %d\n", li);
+    }
+    a.compile_follow = true;
+    a.compile_scroll = 0;
+    app_render(&a);
+    key(&a, KEY_HOME, NULL);
+    check(a.compile_scroll == 0, "Home returns to compile output start");
+    key(&a, KEY_PGDN, NULL);
+    check(a.compile_scroll > 0, "PgDn scrolls compile output");
+    key(&a, KEY_END, NULL);
+    check(a.compile_scroll > 0, "End jumps to compile output end");
+    key(&a, KEY_ESC, NULL);
+    check(!a.compile_active, "Esc closes finished compile window");
+    remove("tests/fixtures/demo/build/demo");
+    remove("tests/fixtures/demo/build/obj/main.c.o");
+    remove("tests/fixtures/demo/build/obj/util.c.o");
+    remove("tests/fixtures/demo/build/obj");
+    remove("tests/fixtures/demo/build");
+
+#ifndef _WIN32
+    {
+        const char *old_path = getenv("PATH");
+        char *saved = old_path ? xstrdup(old_path) : NULL;
+        setenv("PATH", "/nonexistent-si-c", 1);
+        key(&a, KEY_CTRL_F5, NULL);
+        check(a.compile_active && !a.compile_running,
+              "missing compiler stops before running");
+        check(a.compile_log.data &&
+              strstr(a.compile_log.data, "compiler not found") != NULL,
+              "missing compiler is reported");
+        check(!a.compile_ok, "missing compiler is a failure");
+        key(&a, KEY_ESC, NULL);
+        check(!a.compile_active, "missing compiler window closes");
+        if (saved)
+            setenv("PATH", saved, 1);
+        else
+            unsetenv("PATH");
+        free(saved);
+    }
+#endif
 
     /* Relation tables modal: Enter is the OK confirmation. */
     {
@@ -1443,6 +1518,37 @@ int main(int argc, char **argv)
         key(&empty, KEY_ESC, NULL);
         check(!empty.project_picker_active, "empty app picker closes");
         app_render(&empty);
+
+        key(&empty, KEY_CTRL_F5, NULL);
+        check(empty.compile_active && !empty.compile_running,
+              "Ctrl+F5 without project opens result window");
+        check(!empty.compile_ok, "compile without project fails");
+        check(empty.compile_log.data &&
+              strstr(empty.compile_log.data, "No project") != NULL,
+              "compile error explains missing project");
+        app_render(&empty);
+        check(empty.compile_popup_w > 0 && empty.compile_popup_h > 0 &&
+              empty.compile_popup_x ==
+                  (empty.cols - empty.compile_popup_w) / 2 &&
+              empty.compile_popup_y ==
+                  (empty.rows - empty.compile_popup_h) / 2,
+              "compile error window is centered");
+        key(&empty, KEY_ENTER, NULL);
+        check(!empty.compile_active, "Enter closes compile error window");
+
+        key(&empty, KEY_ALT_CHAR, "m");
+        key(&empty, KEY_RIGHT, NULL);
+        key(&empty, KEY_RIGHT, NULL);
+        check(empty.menu_active &&
+              strcmp(app_menu_group_name(empty.menu_group), "Compile") == 0,
+              "right arrow reaches Compile menu");
+        key(&empty, KEY_DOWN, NULL);
+        check(empty.menu_sel == 1, "Compile menu Quit is second item");
+        key(&empty, KEY_ENTER, NULL);
+        check(empty.quit, "Compile menu Quit uses Ctrl+Q behavior");
+        empty.quit = false;
+
+        str_free(&empty.compile_log);
         app_view_clear(&empty.view);
         free(empty.view.items);
         free(empty.call_boxes);
@@ -1451,6 +1557,86 @@ int main(int argc, char **argv)
         buf_free(empty.info_buffer);
         strlist_free(&empty.recent_projects);
     }
+
+#ifndef _WIN32
+    {
+        char tmpl[] = "/tmp/si-compile-ui-XXXXXX";
+        char *dir = mkdtemp(tmpl);
+        check(dir != NULL, "compile success temp dir");
+        if (dir) {
+            static const char program[] = "int main(void) { return 0; }\n";
+            char *main_path = path_join(dir, "main.c");
+            char *obj_path = path_join(dir, "build/obj/main.c.o");
+            char *obj_dir = path_join(dir, "build/obj");
+            char *build_dir = path_join(dir, "build");
+            char out_rel[512];
+            char *out_path;
+            char *werr = NULL;
+            App ca;
+
+            snprintf(out_rel, sizeof(out_rel), "build/%s",
+                     path_basename(dir));
+            out_path = path_join(dir, out_rel);
+            check(file_write_atomic(main_path, program,
+                                    sizeof(program) - 1, &werr),
+                  "compile success source written");
+            free(werr);
+
+            memset(&ca, 0, sizeof(ca));
+            strlist_init(&ca.recent_projects);
+            ca.active = -1;
+            ca.prompt = PROMPT_NONE;
+            ca.focus = FOCUS_EDITOR;
+            app_use_theme(&ca, "dark");
+            ca.force_rows = 30;
+            ca.force_cols = 100;
+            ca.project.root = xstrdup(dir);
+            ca.project.files = xcalloc(1, sizeof(ProjectFile));
+            ca.project.file_count = 1;
+            ca.project.files[0].rel = xstrdup("main.c");
+            ca.project.files[0].path = xstrdup(main_path);
+            ca.project.files[0].name = xstrdup("main.c");
+            app_layout(&ca);
+
+            app_handle_key_event(&ca, KEY_CTRL_F5, NULL);
+            check(ca.compile_active && !ca.compile_running,
+                  "successful compile leaves window open");
+            check(ca.compile_ok && ca.compile_exit == 0,
+                  "simple project compiles successfully");
+            check(ca.compile_log.data &&
+                  strstr(ca.compile_log.data, "SUCCESS") != NULL,
+                  "compile window reports success");
+            check(path_exists(out_path), "compiled binary is written");
+            app_handle_key_event(&ca, KEY_ENTER, NULL);
+            check(!ca.compile_active, "Enter closes successful compile");
+
+            remove(out_path);
+            remove(obj_path);
+            rmdir(obj_dir);
+            rmdir(build_dir);
+            remove(main_path);
+            rmdir(dir);
+            free(out_path);
+            free(obj_dir);
+            free(build_dir);
+            free(main_path);
+            free(obj_path);
+            app_view_clear(&ca.view);
+            free(ca.view.items);
+            free(ca.call_boxes);
+            app_view_clear(&ca.outline);
+            free(ca.outline.items);
+            buf_free(ca.info_buffer);
+            str_free(&ca.compile_log);
+            strlist_free(&ca.recent_projects);
+            free(ca.project.files[0].rel);
+            free(ca.project.files[0].path);
+            free(ca.project.files[0].name);
+            free(ca.project.files);
+            free(ca.project.root);
+        }
+    }
+#endif
 
     a.force_rows = 24;
     a.force_cols = 80;
@@ -1499,6 +1685,7 @@ int main(int argc, char **argv)
     free(a.back);
     free(a.fwd);
     free(a.home.path);
+    str_free(&a.compile_log);
     strlist_free(&a.recent_projects);
     strlist_free(&a.globals);
     strlist_free(&a.types);

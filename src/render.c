@@ -1170,6 +1170,10 @@ static void draw_hint(App *a, Str *out)
     const char *hint;
     if (a->help)
         hint = " press any key to close help ";
+    else if (a->compile_active)
+        hint = a->compile_running
+                   ? " COMPILE  Esc cancel  Up/Down PgUp/PgDn scroll "
+                   : " COMPILE  Enter/Esc close  Up/Down PgUp/PgDn scroll ";
     else if (a->menu_active)
         hint = " MENU  Up/Down select  Enter execute  Esc close ";
     else if (a->prompt == PROMPT_QUIT)
@@ -1198,9 +1202,9 @@ static void draw_hint(App *a, Str *out)
     else if (a->focus == FOCUS_INFO)
         hint = " SYMBOL INFO  Tab focus  Ctrl+F4/Esc editor  F1 help ";
     else if (a->cols < 120)
-        hint = " F2 outline  ^F3 flow  ^F4 editor  F3 next  F4 prev  F7 files  F6 format  ^F find  F1 help ";
+        hint = " F2 outline  ^F3 flow  ^F4 editor  F3 next  F4 prev  F7 files  F6 format  ^F find  ^F5 compile  F1 help ";
     else
-        hint = " F2 outline  Ctrl+F3 call-flow  Ctrl+F4 editor  F3 next  F4 prev  F7 files  F6 format  ^F find  F8 highlight  F10 back  ^F10 fwd  F12 def  Shift+F12 refs  F1 help ";
+        hint = " F2 outline  Ctrl+F3 call-flow  Ctrl+F4 editor  F3 next  F4 prev  F7 files  F6 format  ^F find  F8 highlight  F10 back  ^F10 fwd  ^F5 compile  F12 def  F1 help ";
 
     sgr_move(out, a->rows - 2, 0);
     sgr_bg(out, a->theme.panel_alt);
@@ -2550,7 +2554,7 @@ static void draw_completion(App *a, Str *out)
 
 static void draw_help(App *a, Str *out)
 {
-    enum { HELP_COLS = 4, HELP_ROWS = 9 };
+    enum { HELP_COLS = 4, HELP_ROWS = 10 };
     static const char *const lines[HELP_ROWS * HELP_COLS] = {
         "F1  Help",         "F2  Outline",       "Ctrl+F3 Flow",
         "Ctrl+F4 Editor",   "F5  Reindex",       "F6  Format",
@@ -2563,7 +2567,9 @@ static void draw_help(App *a, Str *out)
         "Ctrl+O Open proj", "Ctrl+P Symbols",    "Ctrl+Q Quit",
         "Ctrl+R Call flow", "Ctrl+S Save",       "Ctrl+T Cycle focus",
         "Ctrl+U Kill start","Ctrl+V Paste",      "Ctrl+Y Redo",
-        "Ctrl+Z Undo",      "Alt/Opt+R Rebuild", "Tab/Shift+Tab"
+        "Ctrl+Z Undo",      "Alt/Opt+R Rebuild", "Tab/Shift+Tab",
+        "Ctrl+F5 Compile",  "Enter Confirm",     "Esc Cancel",
+        "PgUp/PgDn Scroll"
     };
     int max_col_w = (a->cols - 5) / HELP_COLS;
     int col_w = SI_MIN(22, max_col_w);
@@ -2923,6 +2929,239 @@ static void draw_too_small(App *a, Str *out)
     a->show_cursor = false;
 }
 
+/* ------------------------------------------------------------------ */
+/* Compile output window                                               */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    size_t start;
+    size_t len;
+} CompileRow;
+
+static void compile_rows_push(CompileRow **rows, size_t *count, size_t *cap,
+                              size_t start, size_t len)
+{
+    if (*count >= 200000)
+        return;
+    if (*count == *cap) {
+        *cap = *cap ? *cap * 2 : 256;
+        *rows = xrealloc(*rows, *cap * sizeof(**rows));
+    }
+    (*rows)[*count].start = start;
+    (*rows)[*count].len = len;
+    (*count)++;
+}
+
+static void compile_rows_build(const Str *log, int width,
+                               CompileRow **rows_out, size_t *count_out)
+{
+    CompileRow *rows = NULL;
+    size_t count = 0;
+    size_t cap = 0;
+    size_t pos = 0;
+
+    if (width < 1)
+        width = 1;
+    if (!log || !log->data || log->len == 0) {
+        compile_rows_push(&rows, &count, &cap, 0, 0);
+        *rows_out = rows;
+        *count_out = count;
+        return;
+    }
+    for (;;) {
+        size_t end = pos;
+        size_t row_start;
+        size_t i;
+        int col = 0;
+
+        while (end < log->len && log->data[end] != '\n')
+            end++;
+        row_start = pos;
+        i = pos;
+        while (i < end) {
+            uint32_t cp;
+            int n = utf8_decode(log->data + i, end - i, &cp);
+            int w = n > 0 ? utf8_cp_width(cp) : 1;
+            if (n <= 0) {
+                n = 1;
+                w = 1;
+            }
+            if (w < 0)
+                w = 0;
+            if (col > 0 && col + w > width) {
+                compile_rows_push(&rows, &count, &cap, row_start,
+                                  i - row_start);
+                row_start = i;
+                col = 0;
+            }
+            col += w;
+            i += (size_t)n;
+        }
+        compile_rows_push(&rows, &count, &cap, row_start, end - row_start);
+        if (end >= log->len)
+            break;
+        pos = end + 1;
+        if (pos == log->len) {
+            compile_rows_push(&rows, &count, &cap, pos, 0);
+            break;
+        }
+    }
+    *rows_out = rows;
+    *count_out = count;
+}
+
+static int compile_status_color(const App *a)
+{
+    const Theme *t = &a->theme;
+    if (a->compile_running)
+        return t->syn[HL_NUMBER];
+    if (a->compile_cancelled)
+        return t->dim;
+    if (a->compile_ok)
+        return t->syn[HL_STRING];
+    return t->syn[HL_GLOBAL];
+}
+
+static void draw_compile(App *a, Str *out)
+{
+    const Theme *t = &a->theme;
+    int boxw;
+    int boxh;
+    int x;
+    int y;
+    int text_w;
+    int out_rows;
+    int i;
+    CompileRow *rows = NULL;
+    size_t count = 0;
+    int max_scroll;
+
+    if (a->cols < 30 || a->rows < 8)
+        return;
+    boxw = SI_MIN(110, a->cols - 4);
+    boxh = SI_MIN(30, a->rows - 4);
+    if (boxw < 40)
+        boxw = a->cols - 2;
+    if (boxh < 8)
+        boxh = a->rows - 2;
+    if (boxw < 20 || boxh < 6)
+        return;
+    x = (a->cols - boxw) / 2;
+    y = (a->rows - boxh) / 2;
+    text_w = boxw - 4;
+    out_rows = boxh - 5;
+    if (out_rows < 1)
+        out_rows = 1;
+
+    compile_rows_build(&a->compile_log, text_w, &rows, &count);
+    max_scroll = count > (size_t)out_rows ? (int)(count - (size_t)out_rows)
+                                          : 0;
+    if (a->compile_follow)
+        a->compile_scroll = max_scroll;
+    if (a->compile_scroll < 0)
+        a->compile_scroll = 0;
+    if (a->compile_scroll > max_scroll)
+        a->compile_scroll = max_scroll;
+
+    a->compile_popup_x = x;
+    a->compile_popup_y = y;
+    a->compile_popup_w = boxw;
+    a->compile_popup_h = boxh;
+    a->compile_visible_rows = out_rows;
+
+    for (i = 0; i < boxh; i++) {
+        sgr_move(out, y + i, x);
+        sgr_bg(out, t->panel_alt);
+        sgr_fg(out, t->border);
+        if (i == 0 || i == boxh - 1) {
+            int j;
+            str_puts(out, i == 0 ? "\xe2\x94\x8c" : "\xe2\x94\x94");
+            for (j = 0; j < boxw - 2; j++)
+                str_puts(out, "\xe2\x94\x80");
+            str_puts(out, i == 0 ? "\xe2\x94\x90" : "\xe2\x94\x98");
+        } else if (i == 1) {
+            char title[256];
+            int used;
+            snprintf(title, sizeof(title), "COMPILE PROJECT  [%s]",
+                     a->compile_status[0] ? a->compile_status : "FAILED");
+            used = utf8_text_width(title, strlen(title));
+            str_puts(out, "\xe2\x94\x82");
+            str_putc(out, ' ');
+            sgr_bold(out);
+            sgr_fg(out, compile_status_color(a));
+            draw_text(out, title, strlen(title), text_w, false);
+            if (used < text_w)
+                draw_spaces(out, text_w - used);
+            sgr_reset(out);
+            sgr_bg(out, t->panel_alt);
+            sgr_fg(out, t->border);
+            str_putc(out, ' ');
+            str_puts(out, "\xe2\x94\x82");
+        } else if (i == 2) {
+            char cmd[1400];
+            int used;
+            snprintf(cmd, sizeof(cmd), "$ %s", a->compile_cmd);
+            used = utf8_text_width(cmd, strlen(cmd));
+            str_puts(out, "\xe2\x94\x82");
+            str_putc(out, ' ');
+            sgr_fg(out, t->dim);
+            draw_text(out, cmd, strlen(cmd), text_w, true);
+            if (used < text_w)
+                draw_spaces(out, text_w - used);
+            sgr_fg(out, t->border);
+            str_putc(out, ' ');
+            str_puts(out, "\xe2\x94\x82");
+        } else if (i == boxh - 2) {
+            char foot[256];
+            int used;
+            if (a->compile_running) {
+                snprintf(foot, sizeof(foot),
+                         "Esc cancel   Up/Down PgUp/PgDn scroll   working...");
+            } else if (a->compile_exit >= 0) {
+                snprintf(foot, sizeof(foot),
+                         "Enter/Esc close   Up/Down PgUp/PgDn scroll   exit %d",
+                         a->compile_exit);
+            } else {
+                snprintf(foot, sizeof(foot),
+                         "Enter/Esc close   Up/Down PgUp/PgDn scroll");
+            }
+            used = utf8_text_width(foot, strlen(foot));
+            str_puts(out, "\xe2\x94\x82");
+            str_putc(out, ' ');
+            sgr_fg(out, t->dim);
+            draw_text(out, foot, strlen(foot), text_w, false);
+            if (used < text_w)
+                draw_spaces(out, text_w - used);
+            sgr_fg(out, t->border);
+            str_putc(out, ' ');
+            str_puts(out, "\xe2\x94\x82");
+        } else {
+            int idx = a->compile_scroll + (i - 3);
+            str_puts(out, "\xe2\x94\x82");
+            str_putc(out, ' ');
+            if (idx >= 0 && (size_t)idx < count) {
+                CompileRow *r = &rows[idx];
+                const char *p = a->compile_log.data
+                                    ? a->compile_log.data + r->start
+                                    : "";
+                int used = utf8_text_width(p, r->len);
+                sgr_fg(out, t->fg);
+                draw_text(out, p, r->len, text_w, false);
+                if (used < text_w)
+                    draw_spaces(out, text_w - used);
+            } else {
+                draw_spaces(out, text_w);
+            }
+            sgr_fg(out, t->border);
+            str_putc(out, ' ');
+            str_puts(out, "\xe2\x94\x82");
+        }
+        sgr_reset(out);
+    }
+    free(rows);
+    a->show_cursor = false;
+}
+
 void app_render(App *a)
 {
     Str out;
@@ -2979,6 +3218,8 @@ void app_render(App *a)
         if (a->help)
             draw_help(a, &out);
     }
+    if (a->compile_active)
+        draw_compile(a, &out);
 
     {
         bool cursor_visible = a->show_cursor && !a->help &&
@@ -2987,7 +3228,8 @@ void app_render(App *a)
                               !a->relation_ready_prompt &&
                               !a->relations_large_prompt &&
                               !a->context_menu_active &&
-                              !a->project_picker_active;
+                              !a->project_picker_active &&
+                              !a->compile_active;
         if (cursor_visible)
             str_printf(&out, "\x1b[%d;%dH", a->cursor_y + 1,
                        a->cursor_x + 1);

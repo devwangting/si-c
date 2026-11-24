@@ -44,6 +44,7 @@ enum {
     KEY_F11,
     KEY_F12,
     KEY_CTRL_F10,
+    KEY_CTRL_F5,
     KEY_SHIFT_F1,
     KEY_SHIFT_F2,
     KEY_SHIFT_F3,

@@ -1,9 +1,14 @@
 #include "si.h"
+#include "compile.h"
 #include "index.h"
 #include "syntax.h"
 #include "text.h"
 
 #include <math.h>
+
+#if !defined(_WIN32)
+#include <time.h>
+#endif
 
 #ifndef _WIN32
 #include <sys/stat.h>
@@ -833,6 +838,216 @@ static void test_syntax_lists(void)
           "type index out of range");
 }
 
+static bool command_has_arg(const CompileCommand *cmd, const char *arg)
+{
+    size_t i;
+    for (i = 0; i < cmd->argc; i++) {
+        if (strcmp(cmd->argv[i], arg) == 0)
+            return true;
+    }
+    return false;
+}
+
+static void test_compile_helpers(void)
+{
+    char *sh;
+
+    check(compile_is_source("main.c"), "compile: c source");
+    check(compile_is_source("src/a.cpp"), "compile: cpp source");
+    check(compile_is_source("src/a.cc"), "compile: cc source");
+    check(!compile_is_source("util.h"), "compile: header is not source");
+    check(!compile_is_source("README.md"), "compile: other file is not source");
+    check(compile_is_cxx_source("a.cpp"), "compile: cpp is cxx");
+    check(compile_is_cxx_source("a.cxx"), "compile: cxx extension");
+    check(!compile_is_cxx_source("a.c"), "compile: c is not cxx");
+
+    sh = compile_find_program("sh");
+    check(sh != NULL, "compile: find sh in PATH");
+    free(sh);
+    check(compile_find_program("si-no-such-program-xyz") == NULL,
+          "compile: missing program stays missing");
+}
+
+static void test_compile_plan(void)
+{
+    static const char *mixed[] = { "main.c", "util.c", "src/extra.cpp" };
+    static const char *conly[] = { "main.c" };
+    static const char *empty[1];
+    CompilePlan plan;
+    CompileCommand *link;
+    char *err = NULL;
+
+    compile_plan_init(&plan);
+    check(compile_plan_direct("demo", mixed, 3, "/usr/bin/cc", "/usr/bin/c++",
+                              &plan, &err),
+          "compile: mixed plan builds");
+    check(err == NULL, "compile: mixed plan has no error");
+    check(!plan.uses_make, "compile: direct plan uses no make");
+    check(plan.count == 4, "compile: three objects plus link");
+    check(plan.output && strcmp(plan.output, "build/demo") == 0,
+          "compile: output path");
+    if (plan.count == 4) {
+        check(strcmp(plan.items[0].argv[0], "/usr/bin/cc") == 0,
+              "compile: c file uses c compiler");
+        check(command_has_arg(&plan.items[0], "-c"),
+              "compile: object compile flag");
+        check(command_has_arg(&plan.items[0], "build/obj/main.c.o"),
+              "compile: object path");
+        check(strcmp(plan.items[2].argv[0], "/usr/bin/c++") == 0,
+              "compile: cpp file uses c++ compiler");
+        link = &plan.items[3];
+        check(strcmp(link->argv[0], "/usr/bin/c++") == 0,
+              "compile: mixed link uses c++ driver");
+        check(command_has_arg(link, "build/obj/src/extra.cpp.o"),
+              "compile: link includes nested object");
+    }
+    compile_plan_free(&plan);
+
+    compile_plan_init(&plan);
+    check(compile_plan_direct("demo", conly, 1, "/usr/bin/cc", NULL,
+                              &plan, &err),
+          "compile: c-only plan builds");
+    check(plan.count == 2, "compile: c-only compile plus link");
+    if (plan.count == 2) {
+        check(strcmp(plan.items[1].argv[0], "/usr/bin/cc") == 0,
+              "compile: c-only link uses c compiler");
+        check(command_has_arg(&plan.items[1], "-o"),
+              "compile: link writes output");
+    }
+    compile_plan_free(&plan);
+
+    compile_plan_init(&plan);
+    check(!compile_plan_direct("demo", empty, 0, "/usr/bin/cc", NULL,
+                               &plan, &err),
+          "compile: empty project is rejected");
+    free(err);
+    err = NULL;
+    compile_plan_free(&plan);
+
+    compile_plan_init(&plan);
+    check(!compile_plan_direct("demo", conly, 1, NULL, NULL, &plan, &err),
+          "compile: missing compiler is rejected");
+    check(err != NULL && strstr(err, "compiler") != NULL,
+          "compile: missing compiler explains why");
+    free(err);
+    err = NULL;
+    compile_plan_free(&plan);
+
+    compile_plan_init(&plan);
+    check(compile_plan_make("demo", "/usr/bin/make", &plan, &err),
+          "compile: make plan builds");
+    check(plan.uses_make && plan.count == 1,
+          "compile: make plan has one command");
+    if (plan.count == 1) {
+        check(strcmp(plan.items[0].argv[0], "/usr/bin/make") == 0 &&
+              command_has_arg(&plan.items[0], "-C") &&
+              command_has_arg(&plan.items[0], "demo"),
+              "compile: make runs in project root");
+    }
+    compile_plan_free(&plan);
+
+#ifndef _WIN32
+    {
+        const char *old_path = getenv("PATH");
+        char *saved = old_path ? xstrdup(old_path) : NULL;
+        check(setenv("PATH", "/nonexistent-si-c", 1) == 0,
+              "compile: temporarily clear PATH");
+        compile_plan_init(&plan);
+        check(!compile_plan_build("tests/fixtures/demo", conly, 1,
+                                  &plan, &err),
+              "compile: build rejects missing toolchain");
+        check(err != NULL, "compile: toolchain error message");
+        free(err);
+        err = NULL;
+        compile_plan_free(&plan);
+        if (saved)
+            setenv("PATH", saved, 1);
+        else
+            unsetenv("PATH");
+        free(saved);
+    }
+#endif
+}
+
+static void test_compile_sanitize(void)
+{
+    Str out;
+    const char *raw = "\x1b[31merror\x1b[0m\r\nx\ty\n";
+
+    str_init(&out);
+    compile_sanitize_append(&out, raw, strlen(raw));
+    check(out.data && strstr(out.data, "error") != NULL,
+          "compile: sanitize keeps text");
+    check(out.data && strchr(out.data, 27) == NULL,
+          "compile: sanitize strips escape");
+    check(out.data && strstr(out.data, "x   y") != NULL,
+          "compile: sanitize expands tabs");
+    str_free(&out);
+}
+
+#ifndef _WIN32
+static void test_compile_makefile_detection(void)
+{
+    char tmpl[] = "/tmp/si-compile-XXXXXX";
+    char path[512];
+    char *dir = mkdtemp(tmpl);
+    CompilePlan plan;
+    char *err = NULL;
+
+    check(dir != NULL, "compile: temp dir created");
+    if (!dir)
+        return;
+    snprintf(path, sizeof(path), "%s/Makefile", dir);
+    check(file_write_atomic(path, "all:\n\t@true\n", 12, &err),
+          "compile: write Makefile fixture");
+    free(err);
+    err = NULL;
+    check(compile_has_makefile(dir), "compile: Makefile detected");
+    compile_plan_init(&plan);
+    check(compile_plan_build(dir, NULL, 0, &plan, &err),
+          "compile: Makefile plan selected");
+    check(plan.uses_make && plan.count == 1,
+          "compile: Makefile uses make");
+    compile_plan_free(&plan);
+    remove(path);
+    rmdir(dir);
+}
+
+static void test_compile_process(void)
+{
+    char *argv[] = { "/bin/sh", "-c",
+                     "printf 'hello\\n'; printf 'err\\n' >&2; exit 7",
+                     NULL };
+    CompileProcess p;
+    Str out;
+    char *err = NULL;
+    int i;
+
+    memset(&p, 0, sizeof(p));
+    p.fd = -1;
+    str_init(&out);
+    check(compile_process_start(&p, ".", argv, &err),
+          "compile: process starts");
+    for (i = 0; i < 300 && p.running; i++) {
+        struct timespec ts;
+        compile_process_poll(&p, &out);
+        ts.tv_sec = 0;
+        ts.tv_nsec = 10 * 1000 * 1000;
+        nanosleep(&ts, NULL);
+    }
+    compile_process_poll(&p, &out);
+    check(!p.running, "compile: process finishes");
+    check(p.exit_code == 7, "compile: process exit code");
+    check(out.data && strstr(out.data, "hello") != NULL,
+          "compile: process captures stdout");
+    check(out.data && strstr(out.data, "err") != NULL,
+          "compile: process captures stderr");
+    compile_process_close(&p);
+    str_free(&out);
+    free(err);
+}
+#endif
+
 int main(int argc, char **argv)
 {
     const char *root = argc > 1 ? argv[1] : "tests/fixtures/demo";
@@ -843,8 +1058,13 @@ int main(int argc, char **argv)
     test_syntax();
     test_syntax_lists();
     test_type_keys();
+    test_compile_helpers();
+    test_compile_plan();
+    test_compile_sanitize();
 #ifndef _WIN32
     test_state();
+    test_compile_makefile_detection();
+    test_compile_process();
 #endif
     test_project(root);
     printf("%d checks, %d failures\n", checks, failures);

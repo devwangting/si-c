@@ -1,5 +1,6 @@
 #include "si.h"
 #include "app.h"
+#include "compile.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -25,6 +26,8 @@ static void app_menu_open(App *a);
 static void app_prompt_begin(App *a, PromptKind kind, const char *initial);
 static void app_project_picker_close(App *a);
 static void app_request_quit(App *a);
+static void app_compile_begin(App *a);
+static void app_compile_handle_key(App *a, KeyEvent *ev);
 
 typedef struct {
     const char *root;
@@ -6017,6 +6020,332 @@ static void app_request_quit(App *a)
     }
 }
 
+#define SI_COMPILE_MAX_OUTPUT (4u * 1024u * 1024u)
+
+static int compile_log_lines(const App *a)
+{
+    size_t i;
+    int lines = 1;
+
+    if (!a->compile_log.data)
+        return 1;
+    for (i = 0; i < a->compile_log.len; i++) {
+        if (a->compile_log.data[i] == '\n')
+            lines++;
+    }
+    return lines;
+}
+
+static void app_compile_follow_tail(App *a)
+{
+    int max = compile_log_lines(a) - 1;
+    if (max < 0)
+        max = 0;
+    if (a->compile_follow)
+        a->compile_scroll = max;
+    if (a->compile_scroll > max)
+        a->compile_scroll = max;
+}
+
+static void app_compile_cap_output(App *a)
+{
+    size_t keep;
+    if (a->compile_log.len <= SI_COMPILE_MAX_OUTPUT)
+        return;
+    keep = SI_COMPILE_MAX_OUTPUT > 64 ? SI_COMPILE_MAX_OUTPUT - 64
+                                      : SI_COMPILE_MAX_OUTPUT;
+    a->compile_log.len = keep;
+    if (a->compile_log.data)
+        a->compile_log.data[a->compile_log.len] = '\0';
+    str_puts(&a->compile_log, "\n[output truncated]\n");
+}
+
+static void app_compile_message(App *a, const char *status, const char *msg)
+{
+    a->compile_running = false;
+    a->compile_ok = false;
+    snprintf(a->compile_status, sizeof(a->compile_status), "%s", status);
+    if (msg && *msg) {
+        str_puts(&a->compile_log, msg);
+        if (a->compile_log.len == 0 ||
+            a->compile_log.data[a->compile_log.len - 1] != '\n')
+            str_putc(&a->compile_log, '\n');
+    }
+    str_puts(&a->compile_log, "\nPress Enter or Esc to close.\n");
+    a->compile_follow = true;
+    app_compile_follow_tail(a);
+    app_set_status(a, "Compile %s: %s", status, msg ? msg : "");
+}
+
+#ifndef _WIN32
+static void compile_sleep_ms(int ms)
+{
+    struct timespec ts;
+    ts.tv_sec = ms / 1000;
+    ts.tv_nsec = (long)(ms % 1000) * 1000L * 1000L;
+    nanosleep(&ts, NULL);
+}
+#else
+static void compile_sleep_ms(int ms)
+{
+    (void)ms;
+}
+#endif
+
+static void app_compile_scroll(App *a, int delta, bool absolute, int value)
+{
+    int max = compile_log_lines(a) - 1;
+    if (max < 0)
+        max = 0;
+    if (absolute)
+        a->compile_scroll = value;
+    else
+        a->compile_scroll += delta;
+    if (a->compile_scroll < 0)
+        a->compile_scroll = 0;
+    if (a->compile_scroll > max)
+        a->compile_scroll = max;
+    a->compile_follow = a->compile_scroll == max;
+}
+
+static bool app_compile_key(App *a, KeyEvent *ev, bool running)
+{
+    int page = a->compile_visible_rows > 2 ? a->compile_visible_rows - 2 : 8;
+    int max = compile_log_lines(a) - 1;
+
+    if (max < 0)
+        max = 0;
+    if (ev->code == KEY_ESC || ev->code == 3) {
+        if (running)
+            return true;
+        a->compile_active = false;
+        app_set_status(a, "Compile window closed");
+        return false;
+    }
+    if (ev->code == KEY_MOUSE) {
+        if (ev->mouse_button == 64)
+            app_compile_scroll(a, -3, false, 0);
+        else if (ev->mouse_button == 65)
+            app_compile_scroll(a, 3, false, 0);
+        return false;
+    }
+    if (ev->code == KEY_UP)
+        app_compile_scroll(a, -1, false, 0);
+    else if (ev->code == KEY_DOWN)
+        app_compile_scroll(a, 1, false, 0);
+    else if (ev->code == KEY_PGUP)
+        app_compile_scroll(a, -page, false, 0);
+    else if (ev->code == KEY_PGDN)
+        app_compile_scroll(a, page, false, 0);
+    else if (ev->code == KEY_HOME)
+        app_compile_scroll(a, 0, true, 0);
+    else if (ev->code == KEY_END)
+        app_compile_scroll(a, 0, true, max);
+    else if (!running && ev->code == KEY_ENTER) {
+        a->compile_active = false;
+        app_set_status(a, "Compile window closed");
+    }
+    return false;
+}
+
+static void app_compile_handle_key(App *a, KeyEvent *ev)
+{
+    if (a->compile_running)
+        return;
+    app_compile_key(a, ev, false);
+}
+
+static void app_compile_drain(App *a, CompileProcess *proc)
+{
+    int i;
+    for (i = 0; i < 200 && proc->fd >= 0; i++) {
+        compile_process_poll(proc, &a->compile_log);
+        if (proc->fd < 0)
+            break;
+        compile_sleep_ms(5);
+    }
+}
+
+static void app_compile_start_process(App *a, CompilePlan *plan,
+                                      bool *cancelled, bool *ok)
+{
+    size_t i;
+    KeyEvent ev;
+
+    for (i = 0; i < plan->count; i++) {
+        CompileCommand *cmd = &plan->items[i];
+        CompileProcess proc;
+        char *display = compile_command_display(cmd);
+        char *err = NULL;
+        int poll_rc = 0;
+        bool cancel = false;
+
+        str_printf(&a->compile_log, "\n$ %s\n", display);
+        snprintf(a->compile_cmd, sizeof(a->compile_cmd), "%s", display);
+        free(display);
+
+        if (!compile_process_start(&proc, a->project.root, cmd->argv, &err)) {
+            str_printf(&a->compile_log, "%s\n",
+                       err ? err : "Cannot start command");
+            free(err);
+            *ok = false;
+            return;
+        }
+        free(err);
+        a->compile_follow = true;
+        while (proc.running) {
+            poll_rc = compile_process_poll(&proc, &a->compile_log);
+            app_compile_cap_output(a);
+            app_compile_follow_tail(a);
+            while (term_poll_key(&ev) > 0) {
+                if (app_compile_key(a, &ev, true)) {
+                    cancel = true;
+                    break;
+                }
+            }
+            if (cancel) {
+                compile_process_cancel(&proc);
+                *cancelled = true;
+                break;
+            }
+            app_layout(a);
+            app_render(a);
+            if (poll_rc <= 0)
+                break;
+            compile_sleep_ms(30);
+        }
+        app_compile_drain(a, &proc);
+        compile_process_close(&proc);
+        a->compile_exit = proc.exit_code;
+        app_compile_follow_tail(a);
+        if (cancel)
+            return;
+        if (poll_rc < 0) {
+            str_puts(&a->compile_log, "Compiler process failed\n");
+            *ok = false;
+            return;
+        }
+        if (proc.exit_code != 0) {
+            *ok = false;
+            return;
+        }
+    }
+}
+
+static void app_compile_begin(App *a)
+{
+    CompilePlan plan;
+    const char **rels = NULL;
+    size_t nrels = 0;
+    size_t i;
+    char *err = NULL;
+    bool ok = true;
+    bool cancelled = false;
+    long elapsed;
+
+    if (a->compile_running)
+        return;
+    app_completion_close(a);
+    compile_plan_init(&plan);
+    str_clear(&a->compile_log);
+    a->compile_active = true;
+    a->compile_running = false;
+    a->compile_ok = false;
+    a->compile_cancelled = false;
+    a->compile_follow = true;
+    a->compile_exit = -1;
+    a->compile_scroll = 0;
+    a->compile_popup_x = 0;
+    a->compile_popup_y = 0;
+    a->compile_popup_w = 0;
+    a->compile_popup_h = 0;
+    a->compile_visible_rows = 0;
+    a->compile_started = (long)time(NULL);
+    a->compile_cmd[0] = '\0';
+    snprintf(a->compile_status, sizeof(a->compile_status), "FAILED");
+
+    if (!a->project.root || !*a->project.root) {
+        app_compile_message(a, "FAILED",
+                            "No project open. Open a project before compiling.");
+        return;
+    }
+    if (any_dirty(a) && !save_all(a)) {
+        app_compile_message(a, "FAILED",
+                            "Cannot save unsaved files; compile cancelled.");
+        return;
+    }
+    if (a->project.file_count == 0) {
+        app_compile_message(a, "FAILED",
+                            "The project has no files to compile.");
+        return;
+    }
+    rels = xmalloc(a->project.file_count * sizeof(*rels));
+    for (i = 0; i < a->project.file_count; i++)
+        rels[nrels++] = a->project.files[i].rel;
+
+    if (!compile_plan_build(a->project.root, rels, nrels, &plan, &err)) {
+        char msg[1024];
+        snprintf(msg, sizeof(msg), "%s", err ? err : "Cannot build compile plan");
+        app_compile_message(a, "FAILED", msg);
+        free(err);
+        free(rels);
+        compile_plan_free(&plan);
+        return;
+    }
+    free(err);
+    err = NULL;
+    if (!compile_plan_prepare(a->project.root, &plan, &err)) {
+        char msg[1024];
+        snprintf(msg, sizeof(msg), "%s",
+                 err ? err : "Cannot create build directories");
+        app_compile_message(a, "FAILED", msg);
+        free(err);
+        free(rels);
+        compile_plan_free(&plan);
+        return;
+    }
+    free(err);
+    err = NULL;
+
+    a->compile_running = true;
+    a->compile_ok = true;
+    snprintf(a->compile_status, sizeof(a->compile_status), "RUNNING");
+    app_set_status(a, "Compiling project...");
+    app_compile_start_process(a, &plan, &cancelled, &ok);
+
+    a->compile_running = false;
+    a->compile_ok = ok && !cancelled;
+    a->compile_cancelled = cancelled;
+    a->compile_follow = true;
+    app_compile_follow_tail(a);
+    elapsed = (long)time(NULL) - a->compile_started;
+    if (elapsed < 0)
+        elapsed = 0;
+    if (cancelled) {
+        snprintf(a->compile_status, sizeof(a->compile_status), "CANCELLED");
+        str_printf(&a->compile_log,
+                   "\n[CANCELLED] compile stopped after %lds\n", elapsed);
+        app_set_status(a, "Compile cancelled");
+    } else if (ok) {
+        snprintf(a->compile_status, sizeof(a->compile_status), "SUCCESS");
+        str_printf(&a->compile_log, "\n[SUCCESS] finished in %lds\n", elapsed);
+        if (plan.output)
+            str_printf(&a->compile_log, "Output: %s\n", plan.output);
+        app_set_status(a, "Compile succeeded: %s",
+                       plan.output ? plan.output : "make");
+    } else {
+        snprintf(a->compile_status, sizeof(a->compile_status), "FAILED");
+        str_printf(&a->compile_log, "\n[FAILED] exit code %d after %lds\n",
+                   a->compile_exit, elapsed);
+        app_set_status(a, "Compile failed (exit %d)", a->compile_exit);
+    }
+    str_puts(&a->compile_log, "Press Enter or Esc to close.\n");
+    app_compile_follow_tail(a);
+
+    free(rels);
+    compile_plan_free(&plan);
+}
+
 enum {
     MENU_OPEN_PROJECT = 0,
     MENU_NEW_PROJECT,
@@ -6027,18 +6356,20 @@ enum {
     MENU_SAVE_ALL,
     MENU_HELP,
     MENU_QUIT,
+    MENU_COMPILE,
     MENU_COUNT
 };
 
 static const int menu_group_actions[APP_MENU_GROUPS][4] = {
     { MENU_OPEN_PROJECT, MENU_NEW_PROJECT, MENU_SAVE, MENU_SAVE_ALL },
     { MENU_BACK, MENU_FORWARD, -1, -1 },
+    { MENU_COMPILE, MENU_QUIT, -1, -1 },
     { MENU_FORMAT, -1, -1, -1 },
     { MENU_HELP, MENU_QUIT, -1, -1 }
 };
-static const int menu_group_sizes[APP_MENU_GROUPS] = { 4, 2, 1, 2 };
+static const int menu_group_sizes[APP_MENU_GROUPS] = { 4, 2, 2, 1, 2 };
 static const char *const menu_group_names[APP_MENU_GROUPS] = {
-    "Project", "Navigate", "Format", "Help"
+    "Project", "Navigate", "Compile", "Format", "Help"
 };
 static const char *const menu_labels[MENU_COUNT] = {
     "Open Project Directory...",
@@ -6049,11 +6380,12 @@ static const char *const menu_labels[MENU_COUNT] = {
     "Save Current File",
     "Save All Files",
     "Help",
-    "Quit"
+    "Quit",
+    "Compile Project"
 };
 static const char *const menu_keys[MENU_COUNT] = {
     "Ctrl+O", "Ctrl+N", "F10", "Ctrl+F10", "F6", "Ctrl+S", "Ctrl+A",
-    "Ctrl+H", "Ctrl+Q"
+    "Ctrl+H", "Ctrl+Q", "Ctrl+F5"
 };
 
 void app_menu_tab_layout(App *a, int xs[APP_MENU_GROUPS],
@@ -6184,6 +6516,9 @@ static void app_menu_execute(App *a, int action)
         break;
     case MENU_QUIT:
         app_request_quit(a);
+        break;
+    case MENU_COMPILE:
+        app_compile_begin(a);
         break;
     default:
         break;
@@ -7157,6 +7492,10 @@ static void app_handle_mouse(App *a, KeyEvent *ev)
 
 static void app_handle_key(App *a, KeyEvent *ev)
 {
+    if (a->compile_active) {
+        app_compile_handle_key(a, ev);
+        return;
+    }
     if (a->relation_building)
         return;
     if (a->relations_large_prompt) {
@@ -7251,6 +7590,10 @@ static void app_handle_key(App *a, KeyEvent *ev)
     }
     if (ev->code == KEY_F5) {
         app_reload_project(a);
+        return;
+    }
+    if (ev->code == KEY_CTRL_F5) {
+        app_compile_begin(a);
         return;
     }
     if (ev->code == KEY_F10) {
@@ -7852,6 +8195,7 @@ int ui_run(const char *root, const char *initial_file, const char *theme,
     app_save_state(&a);
     term_shutdown();
     app_completion_reset(&a);
+    str_free(&a.compile_log);
     free(a.sym_name_index);
     {
         int i;

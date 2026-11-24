@@ -217,6 +217,23 @@ typedef struct {
     char comp_suppress_word[256];
     bool comp_suppress_member;
 
+    bool compile_active;
+    bool compile_running;
+    bool compile_ok;
+    bool compile_cancelled;
+    bool compile_follow;
+    int compile_exit;
+    Str compile_log;
+    int compile_scroll;
+    int compile_popup_x;
+    int compile_popup_y;
+    int compile_popup_w;
+    int compile_popup_h;
+    int compile_visible_rows;
+    long compile_started;
+    char compile_status[64];
+    char compile_cmd[1024];
+
     bool relations_pending;
     bool relation_building;
     bool relation_ready_prompt;
@@ -369,7 +386,7 @@ bool app_completion_geometry(App *a, int *x, int *y, int *w, int *h,
                              int *first, int *rows);
 bool app_completion_suppresses_word(App *a, const char *word);
 
-#define APP_MENU_GROUPS 4
+#define APP_MENU_GROUPS 5
 #define APP_PROJECT_PICKER_MAX_W 78
 #define APP_PROJECT_PICKER_MAX_H 22
 

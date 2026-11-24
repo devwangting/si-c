@@ -120,6 +120,8 @@ static int key_for_ctrl_f(int n)
         return KEY_CTRL_F3;
     if (n == 4)
         return KEY_CTRL_F4;
+    if (n == 5)
+        return KEY_CTRL_F5;
     return key_for_f(n);
 }
 
@@ -247,6 +249,8 @@ static int csi_key(const char *seq, int len, KeyEvent *ev)
                 }
                 if (fn == 10 && ctrl && !shift)
                     ev->code = KEY_CTRL_F10;
+                else if (ctrl && (fn == 3 || fn == 4 || fn == 5))
+                    ev->code = key_for_ctrl_f(fn);
                 else
                     ev->code = shift ? key_for_shift_f(fn) : key_for_f(fn);
                 return 1;
