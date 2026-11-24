@@ -1253,8 +1253,11 @@ int main(int argc, char **argv)
           "Compile menu has Compile Project");
     check(strcmp(app_menu_item_key(2, 0), "Ctrl+F5") == 0,
           "Compile Project shows Ctrl+F5");
-    check(strcmp(app_menu_item_key(2, 1), "Ctrl+Q") == 0,
-          "Compile menu has Ctrl+Q Quit");
+    check(app_menu_group_size(2) == 1,
+          "Compile menu only has Compile Project");
+    check(app_menu_group_size(4) == 2 &&
+              strcmp(app_menu_item_label(4, 1), "Quit") == 0,
+          "Help menu keeps Quit");
     key(&a, KEY_ALT_CHAR, "m");
     check(a.menu_active, "Alt+M opens menu");
     app_render(&a);
@@ -1542,10 +1545,16 @@ int main(int argc, char **argv)
         check(empty.menu_active &&
               strcmp(app_menu_group_name(empty.menu_group), "Compile") == 0,
               "right arrow reaches Compile menu");
+        check(app_menu_group_size(empty.menu_group) == 1,
+              "Compile menu has no Quit item");
+        key(&empty, KEY_RIGHT, NULL);
+        key(&empty, KEY_RIGHT, NULL);
+        check(strcmp(app_menu_group_name(empty.menu_group), "Help") == 0,
+              "right arrow reaches Help menu");
         key(&empty, KEY_DOWN, NULL);
-        check(empty.menu_sel == 1, "Compile menu Quit is second item");
+        check(empty.menu_sel == 1, "Help menu Quit is second item");
         key(&empty, KEY_ENTER, NULL);
-        check(empty.quit, "Compile menu Quit uses Ctrl+Q behavior");
+        check(empty.quit, "Help menu Quit still works");
         empty.quit = false;
 
         str_free(&empty.compile_log);

@@ -6363,11 +6363,11 @@ enum {
 static const int menu_group_actions[APP_MENU_GROUPS][4] = {
     { MENU_OPEN_PROJECT, MENU_NEW_PROJECT, MENU_SAVE, MENU_SAVE_ALL },
     { MENU_BACK, MENU_FORWARD, -1, -1 },
-    { MENU_COMPILE, MENU_QUIT, -1, -1 },
+    { MENU_COMPILE, -1, -1, -1 },
     { MENU_FORMAT, -1, -1, -1 },
     { MENU_HELP, MENU_QUIT, -1, -1 }
 };
-static const int menu_group_sizes[APP_MENU_GROUPS] = { 4, 2, 2, 1, 2 };
+static const int menu_group_sizes[APP_MENU_GROUPS] = { 4, 2, 1, 1, 2 };
 static const char *const menu_group_names[APP_MENU_GROUPS] = {
     "Project", "Navigate", "Compile", "Format", "Help"
 };

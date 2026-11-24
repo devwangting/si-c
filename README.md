@@ -73,8 +73,8 @@ recommended, preferably with 256 colors; 16-color terminals degrade automaticall
   into `build/obj/`, and the program is linked to `build/<project-name>`. A centered window
   shows the live command output, supports scrolling, and stays open after success or failure
   until you press `Enter`/`Esc`; `Esc` cancels a running build.
-- **Compile menu**: the top-level **Compile** menu provides **Compile Project** (`Ctrl+F5`)
-  and **Quit** (`Ctrl+Q`).
+- **Compile menu**: the top-level **Compile** menu provides **Compile Project** (`Ctrl+F5`).
+  Quit (`Ctrl+Q`) remains in the **Help** menu.
 - **Variable highlighting**: `F8` highlights all occurrences of the current variable in the
   visible area and the CODE panel.
 - **Themes and mouse**: dark/light themes, SGR mouse click, drag selection, wheel, and four
@@ -470,7 +470,7 @@ Results:
 ```text
 test_core: 364 checks, 0 failures
 test_keys:  32 checks, 0 failures
-ui_smoke:  365 checks, 0 failures
+ui_smoke:  368 checks, 0 failures
 ```
 
 On macOS, `test_keys` also includes Option-key cases, so the check count differs from this
